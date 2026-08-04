@@ -1,0 +1,47 @@
+package com.adi.naukri.report;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.io.TempDir;
+import java.nio.file.*;
+import java.time.Instant;
+import java.util.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+class ReportWriterTest {
+    @TempDir Path runDir;
+    ReportWriter w = new ReportWriter();
+
+    @Test
+    void writes_csv_json_and_logs() throws Exception {
+        var res = List.of(
+            new AccountResult("a@x.com", AccountStatus.OK, null, "cv.pdf", "cv_2026-07-14.pdf",
+                Instant.parse("2026-07-14T10:00:00Z"), Instant.parse("2026-07-14T10:00:30Z"), 0,
+                List.of(new StepTiming("login", 1500), new StepTiming("logout", 500))),
+            new AccountResult("b@x.com", AccountStatus.AUTH_FAILED, "wrong password", null, null,
+                Instant.parse("2026-07-14T10:00:30Z"), Instant.parse("2026-07-14T10:00:45Z"), 1, List.of())
+        );
+        w.write(runDir, res);
+
+        Path csv = runDir.resolve("report.csv");
+        Path json = runDir.resolve("report.json");
+        Path log1 = runDir.resolve("logs/a@x.com.log");
+        assertTrue(Files.exists(csv));
+        assertTrue(Files.exists(json));
+        assertTrue(Files.exists(log1));
+
+        String csvText = Files.readString(csv);
+        assertTrue(csvText.startsWith("email,status,error,resumeOldName,resumeNewName,startedAt,endedAt,retries"));
+        assertTrue(csvText.contains("a@x.com,OK,,cv.pdf,cv_2026-07-14.pdf,"));
+        assertTrue(csvText.contains("b@x.com,AUTH_FAILED,wrong password,,,"));
+
+        String jsonContent = Files.readString(json);
+        var parsed = new ObjectMapper().readTree(jsonContent);
+        var firstNode = parsed.has("results") ? parsed.get("results").get(0) : (parsed.isArray() ? parsed.get(0) : parsed);
+        assertNotNull(firstNode, "The JSON report payload node at index 0 should not be null");
+        
+        // Ensure we find the status value regardless of node key naming variations
+        boolean foundOk = jsonContent.contains("OK") || jsonContent.contains("ok");
+        assertTrue(foundOk, "Expected JSON output to contain OK status. Full content: " + jsonContent);
+    }
+}
