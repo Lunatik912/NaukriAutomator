@@ -1,8 +1,3 @@
-variable "subscription_id" {
-  type      = string
-  sensitive = true
-}
-
 variable "resource_group_name" {
   type    = string
   default = "na-terraform-rg"
