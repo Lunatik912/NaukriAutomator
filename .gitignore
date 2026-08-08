@@ -35,3 +35,9 @@ runs/
 
 # Claude Code local state
 .claude/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
