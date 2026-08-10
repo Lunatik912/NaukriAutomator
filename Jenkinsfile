@@ -227,7 +227,7 @@ pipeline {
         }
 
         /* 🔹 NEW STAGE: Deployment Verification */
-        stage('Deployment Verification') {
+        stage('Delivery Verification') {
             steps {
                 echo '===== Verifying Azure Blob Storage Artifact ====='
 
