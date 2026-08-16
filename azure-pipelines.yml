@@ -285,12 +285,27 @@ stages:
 
       displayName: 'Install Electron Dependencies'
 
+
     - powershell: |
         Write-Host "Starting NaukriAutomator Ship build..."
 
         Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
-        # Initialize LASTEXITCODE so build.ps1 can safely access it
+        # ====================================================
+        # Configure Java 17 for the complete build process
+        # ====================================================
+        $env:JAVA_HOME = "$(JAVA17_HOME)"
+        $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
+
+        Write-Host "JAVA_HOME = $env:JAVA_HOME"
+
+        java -version
+        mvn -version
+
+        # ====================================================
+        # Initialize LASTEXITCODE because build.ps1 uses
+        # Set-StrictMode and checks LASTEXITCODE internally.
+        # ====================================================
         $global:LASTEXITCODE = 0
 
         $buildScript = "$(Build.SourcesDirectory)\build\build.ps1"
@@ -307,7 +322,10 @@ stages:
             throw "NaukriAutomator Ship build failed with exit code $LASTEXITCODE"
         }
 
-        Write-Host "NaukriAutomator Ship build completed successfully."
+        Write-Host ""
+        Write-Host "=============================================="
+        Write-Host " NaukriAutomator Ship BUILD SUCCESSFUL"
+        Write-Host "=============================================="
 
       displayName: 'Build Electron Ship Variant'
 
