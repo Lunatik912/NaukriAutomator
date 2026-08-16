@@ -9,23 +9,34 @@ pool:
   name: B13-Pool
 
 variables:
+  # ============================================================
   # Java
+  # ============================================================
   JAVA17_HOME: 'C:\Program Files\Java\jdk-17'
   JAVA21_HOME: 'C:\Program Files\Java\jdk-21.0.12'
 
+  # ============================================================
   # SonarQube
+  # ============================================================
   SONAR_PROJECT_KEY: 'NA_Jenkins_Demo'
   SONAR_PROJECT_NAME: 'NA_Jenkins_Demo'
 
+  # ============================================================
   # Azure
+  # ============================================================
   AZURE_STORAGE_ACCOUNT: 'naterraformstorage01'
   AZURE_STORAGE_CONTAINER: 'nacontainer'
 
+  # ============================================================
   # Terraform
+  # ============================================================
   TERRAFORM_DIR: '$(Build.SourcesDirectory)\Terraform'
 
+  # ============================================================
   # Electron
+  # ============================================================
   ELECTRON_EXE: '$(Build.SourcesDirectory)\dist\NaukriAutomator 0.1.0.exe'
+
 
 stages:
 
@@ -34,9 +45,11 @@ stages:
 # ============================================================
 - stage: Checkout
   displayName: '1. Checkout'
+
   jobs:
   - job: CheckoutJob
     displayName: 'Checkout GitHub Repository'
+
     steps:
     - checkout: self
       clean: true
@@ -48,19 +61,24 @@ stages:
 - stage: SecurityScan
   displayName: '2. Security Scan - Gitleaks'
   dependsOn: Checkout
+
   jobs:
   - job: Gitleaks
     displayName: 'Run Gitleaks'
+
     steps:
 
     - powershell: |
         Write-Host "Checking Gitleaks..."
+
         gitleaks version
 
         if ($LASTEXITCODE -ne 0) {
             throw "Gitleaks is not available."
         }
+
       displayName: 'Verify Gitleaks'
+
 
     - powershell: |
         Write-Host "Running Gitleaks diagnostic scan..."
@@ -68,7 +86,9 @@ stages:
         gitleaks dir "$(Build.SourcesDirectory)" --redact --report-format sarif --report-path "$(Build.ArtifactStagingDirectory)\gitleaks.sarif" --exit-code 0
 
         Write-Host "Gitleaks diagnostic scan completed."
+
       displayName: 'Gitleaks Scan'
+
 
     - task: PublishPipelineArtifact@1
       displayName: 'Publish Gitleaks Report'
@@ -83,9 +103,11 @@ stages:
 - stage: TestBackend
   displayName: '3. Test Backend'
   dependsOn: SecurityScan
+
   jobs:
   - job: BackendTests
     displayName: 'Run Backend Tests'
+
     steps:
 
     - powershell: |
@@ -93,10 +115,16 @@ stages:
         $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
 
         Write-Host "JAVA_HOME = $env:JAVA_HOME"
+
         java -version
         mvn -version
 
         mvn test
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Backend tests failed with exit code $LASTEXITCODE"
+        }
+
       workingDirectory: '$(Build.SourcesDirectory)\backend'
       displayName: 'Maven Unit Tests'
 
@@ -107,20 +135,34 @@ stages:
 - stage: BuildBackend
   displayName: '4. Build Backend'
   dependsOn: TestBackend
+
   jobs:
   - job: BackendBuild
     displayName: 'Build Spring Boot Backend'
+
     steps:
 
     - powershell: |
         $env:JAVA_HOME = "$(JAVA17_HOME)"
         $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
 
+        Write-Host "JAVA_HOME = $env:JAVA_HOME"
+
         java -version
         mvn -version
 
         mvn clean package -DskipTests
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Backend Maven package failed with exit code $LASTEXITCODE"
+        }
+
         mvn dependency:copy-dependencies
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Maven dependency copy failed with exit code $LASTEXITCODE"
+        }
+
       workingDirectory: '$(Build.SourcesDirectory)\backend'
       displayName: 'Maven Backend Build'
 
@@ -131,9 +173,11 @@ stages:
 - stage: BuildFrontend
   displayName: '5. Build Frontend'
   dependsOn: BuildBackend
+
   jobs:
   - job: FrontendBuild
     displayName: 'Build React Frontend'
+
     steps:
 
     - powershell: |
@@ -141,7 +185,17 @@ stages:
         npm -v
 
         npm install
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm install failed with exit code $LASTEXITCODE"
+        }
+
         npm run build
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Frontend build failed with exit code $LASTEXITCODE"
+        }
+
       workingDirectory: '$(Build.SourcesDirectory)\frontend'
       displayName: 'NPM Install and Build'
 
@@ -152,9 +206,11 @@ stages:
 - stage: SonarQubeAnalysis
   displayName: '6. SonarQube Analysis'
   dependsOn: BuildFrontend
+
   jobs:
   - job: Sonar
     displayName: 'Run SonarQube Analysis'
+
     steps:
 
     - task: SonarQubePrepare@8
@@ -172,10 +228,12 @@ stages:
           sonar.java.libraries=backend/target/dependency/*.jar
           sonar.qualitygate.wait=true
 
+
     - task: SonarQubeAnalyze@8
       displayName: 'Run SonarQube Scanner'
       inputs:
         jdkversion: 'JAVA_HOME_21_X64'
+
 
     - task: SonarQubePublish@8
       displayName: 'Publish SonarQube Quality Gate'
@@ -189,13 +247,16 @@ stages:
 - stage: QualityGate
   displayName: '7. Quality Gate'
   dependsOn: SonarQubeAnalysis
+
   jobs:
   - job: QualityGate
     displayName: 'Verify SonarQube Quality Gate'
+
     steps:
 
     - powershell: |
         Write-Host "SonarQube Quality Gate passed."
+
       displayName: 'Quality Gate Passed'
 
 
@@ -205,18 +266,30 @@ stages:
 - stage: TerraformValidate
   displayName: '8. Terraform Validate'
   dependsOn: QualityGate
+
   jobs:
   - job: TerraformValidation
     displayName: 'Validate Terraform'
+
     steps:
 
     - powershell: |
         terraform version
 
-        cd "$(TERRAFORM_DIR)"
+        Set-Location "$(TERRAFORM_DIR)"
 
         terraform init
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Terraform init failed with exit code $LASTEXITCODE"
+        }
+
         terraform validate
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Terraform validation failed with exit code $LASTEXITCODE"
+        }
+
       displayName: 'Terraform Init and Validate'
 
 
@@ -226,9 +299,11 @@ stages:
 - stage: TerraformInfrastructure
   displayName: '9. Terraform Infrastructure'
   dependsOn: TerraformValidate
+
   jobs:
   - job: TerraformApply
     displayName: 'Terraform Plan and Apply'
+
     steps:
 
     - task: AzureCLI@3
@@ -245,15 +320,31 @@ stages:
           Write-Host "Terraform version:"
           terraform version
 
-          cd "$(TERRAFORM_DIR)"
+          Set-Location "$(TERRAFORM_DIR)"
 
           terraform init
 
+          if ($LASTEXITCODE -ne 0) {
+              throw "Terraform init failed."
+          }
+
           terraform validate
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Terraform validation failed."
+          }
 
           terraform plan -out=tfplan
 
+          if ($LASTEXITCODE -ne 0) {
+              throw "Terraform plan failed."
+          }
+
           terraform apply -auto-approve tfplan
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Terraform apply failed."
+          }
 
 
 # ============================================================
@@ -262,11 +353,16 @@ stages:
 - stage: BuildElectron
   displayName: '10. Build Electron'
   dependsOn: TerraformInfrastructure
+
   jobs:
   - job: ElectronBuild
     displayName: 'Build Windows Electron Application'
+
     steps:
 
+    # ----------------------------------------------------------
+    # Install Electron dependencies
+    # ----------------------------------------------------------
     - powershell: |
         node -v
         npm -v
@@ -286,15 +382,18 @@ stages:
       displayName: 'Install Electron Dependencies'
 
 
-        - powershell: |
+    # ----------------------------------------------------------
+    # Build Electron Ship Variant
+    # ----------------------------------------------------------
+    - powershell: |
         Write-Host "Starting NaukriAutomator Ship build..."
 
         Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
-        # ============================================================
+        # ========================================================
         # Configure Java 17
-        # ============================================================
-        $javaHome = "C:\Program Files\Java\jdk-17"
+        # ========================================================
+        $javaHome = "$(JAVA17_HOME)"
 
         if (-not (Test-Path "$javaHome\bin\java.exe")) {
             throw "Java 17 not found at: $javaHome"
@@ -308,21 +407,29 @@ stages:
         java -version
         mvn -version
 
-        # ============================================================
-        # Initialize LASTEXITCODE because build.ps1 uses
-        # Set-StrictMode and accesses LASTEXITCODE.
-        # ============================================================
+
+        # ========================================================
+        # Initialize LASTEXITCODE
+        # Required because build.ps1 uses StrictMode and
+        # accesses LASTEXITCODE after each phase.
+        # ========================================================
         $global:LASTEXITCODE = 0
 
-        # ============================================================
-        # Create temporary Maven wrapper
+
+        # ========================================================
+        # Maven wrapper
         #
-        # install-playwright.ps1 calls "mvn".
-        # This wrapper guarantees JAVA_HOME is set before Maven runs.
-        # ============================================================
+        # install-playwright.ps1 invokes "mvn".
+        # We place this wrapper before the real Maven directory
+        # in PATH so JAVA_HOME is explicitly set whenever Maven
+        # is invoked.
+        # ========================================================
         $wrapperDir = "$(Build.SourcesDirectory)\.pipeline-tools"
 
-        New-Item -ItemType Directory -Force -Path $wrapperDir | Out-Null
+        New-Item `
+          -ItemType Directory `
+          -Force `
+          -Path $wrapperDir | Out-Null
 
         $realMaven = "C:\Program Files\Java\apache-maven-3.10.0-rc-1\bin\mvn.cmd"
 
@@ -332,41 +439,50 @@ stages:
 
         $mvnWrapper = Join-Path $wrapperDir "mvn.cmd"
 
-        @"
-@echo off
-set "JAVA_HOME=C:\Program Files\Java\jdk-17"
-set "PATH=%JAVA_HOME%\bin;%PATH%"
-call "$realMaven" %*
-exit /b %ERRORLEVEL%
-"@ | Set-Content -Path $mvnWrapper -Encoding ASCII
+        $wrapperLines = @(
+            '@echo off'
+            'set "JAVA_HOME=C:\Program Files\Java\jdk-17"'
+            'set "PATH=%JAVA_HOME%\bin;%PATH%"'
+            'call "C:\Program Files\Java\apache-maven-3.10.0-rc-1\bin\mvn.cmd" %*'
+            'exit /b %ERRORLEVEL%'
+        )
 
-        # Put wrapper FIRST in PATH
+        $wrapperLines |
+            Set-Content `
+              -Path $mvnWrapper `
+              -Encoding ASCII
+
+
+        # Put wrapper first in PATH
         $env:PATH = "$wrapperDir;$env:PATH"
 
-        Write-Host "Temporary Maven wrapper created:"
+        Write-Host "Temporary Maven wrapper:"
         Write-Host $mvnWrapper
 
-        # Verify which Maven will be used
+        Write-Host ""
+        Write-Host "Maven resolution:"
         where.exe mvn
 
-        Write-Host "Starting build.ps1..."
 
-        # ============================================================
-        # Run existing project build script
-        # ============================================================
+        # ========================================================
+        # Existing project build script
+        # ========================================================
         $buildScript = "$(Build.SourcesDirectory)\build\build.ps1"
 
         if (-not (Test-Path $buildScript)) {
             throw "Build script not found: $buildScript"
         }
 
-        Write-Host "Build script: $buildScript"
+        Write-Host ""
+        Write-Host "Build script:"
+        Write-Host $buildScript
 
         & $buildScript -Variant Ship
 
-        # ============================================================
-        # Final exit-code validation
-        # ============================================================
+
+        # ========================================================
+        # Validate build result
+        # ========================================================
         if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
             throw "NaukriAutomator Ship build failed with exit code $LASTEXITCODE"
         }
@@ -378,16 +494,18 @@ exit /b %ERRORLEVEL%
 
       displayName: 'Build Electron Ship Variant'
 
-      
+
 # ============================================================
 # 11. ARCHIVE EXE + UPLOAD AZURE BLOB
 # ============================================================
 - stage: PublishAndUpload
   displayName: '11. Archive EXE and Upload Azure Blob'
   dependsOn: BuildElectron
+
   jobs:
   - job: Publish
     displayName: 'Publish Windows EXE'
+
     steps:
 
     - powershell: |
@@ -402,15 +520,21 @@ exit /b %ERRORLEVEL%
 
       displayName: 'List Generated EXE Files'
 
+
     - powershell: |
 
         $exe = "$(ELECTRON_EXE)"
 
         if (-not (Test-Path $exe)) {
+
             Write-Error "Expected EXE not found: $exe"
 
             Write-Host "Available EXE files:"
-            Get-ChildItem "$(Build.SourcesDirectory)\dist" -Filter "*.exe" -Recurse
+
+            Get-ChildItem `
+              "$(Build.SourcesDirectory)\dist" `
+              -Filter "*.exe" `
+              -Recurse
 
             exit 1
         }
@@ -420,11 +544,13 @@ exit /b %ERRORLEVEL%
 
       displayName: 'Verify EXE'
 
+
     - task: PublishPipelineArtifact@1
       displayName: 'Publish NaukriAutomator EXE'
       inputs:
         targetPath: '$(ELECTRON_EXE)'
         artifact: 'NaukriAutomator-EXE'
+
 
     - task: AzureCLI@3
       displayName: 'Upload EXE to Azure Blob'
@@ -462,9 +588,11 @@ exit /b %ERRORLEVEL%
 - stage: DeploymentVerification
   displayName: '12. Deployment Verification'
   dependsOn: PublishAndUpload
+
   jobs:
   - job: VerifyDeployment
     displayName: 'Verify Azure Blob Deployment'
+
     steps:
 
     - task: AzureCLI@3
