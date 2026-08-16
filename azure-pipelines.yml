@@ -167,7 +167,7 @@ stages:
     - task: SonarQubePrepare@8
       displayName: 'Prepare SonarQube Analysis'
       inputs:
-        SonarQube: 'YOUR_SONARQUBE_SERVICE_CONNECTION'
+        SonarQube: 'ADO-Sonarqube-Service-Connection'
         scannerMode: 'cli'
         configMode: 'manual'
         cliProjectKey: '$(SONAR_PROJECT_KEY)'
@@ -241,7 +241,7 @@ stages:
     - task: AzureCLI@3
       displayName: 'Terraform Plan and Apply'
       inputs:
-        azureSubscription: 'YOUR_AZURE_RESOURCE_MANAGER_SERVICE_CONNECTION'
+        azureSubscription: 'Qwerty-Service-Connection'
         scriptType: 'ps'
         scriptLocation: 'inlineScript'
         inlineScript: |
