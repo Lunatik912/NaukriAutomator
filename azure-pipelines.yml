@@ -17,6 +17,11 @@ variables:
   JAVA21_HOME: 'C:\Program Files\Java\jdk-21.0.12'
 
   # ============================================================
+  # Maven
+  # ============================================================
+  MAVEN_HOME: 'C:\Program Files\Java\apache-maven-3.10.0-rc-1'
+
+  # ============================================================
   # SonarQube
   # ============================================================
   SONAR_PROJECT_KEY: 'NA_Jenkins_Demo'
@@ -39,55 +44,71 @@ variables:
   ELECTRON_EXE: '$(Build.SourcesDirectory)\dist\NaukriAutomator 0.1.0.exe'
 
 
+# ============================================================
+# ONE JOB
+#
+# Keeping the complete pipeline in one job avoids:
+# - repeated checkout
+# - artifact upload/download
+# - workspace recreation
+# - repeated dependency downloads
+# ============================================================
+
 stages:
 
-# ============================================================
-# 1. CHECKOUT
-# ============================================================
-- stage: Checkout
-  displayName: '1. Checkout'
+- stage: NaukriAutomatorPipeline
+  displayName: 'NaukriAutomator CI/CD Pipeline'
 
   jobs:
-  - job: CheckoutJob
-    displayName: 'Checkout GitHub Repository'
+
+  - job: BuildAndDeploy
+    displayName: 'Build, Test, Scan, Provision and Deploy'
 
     steps:
+
+    # ========================================================
+    # 1. CHECKOUT
+    # ========================================================
 
     - checkout: self
-      clean: true
-
-
-# ============================================================
-# 2. GITLEAKS SECURITY SCAN
-# ============================================================
-- stage: SecurityScan
-  displayName: '2. Security Scan - Gitleaks'
-  dependsOn: Checkout
-
-  jobs:
-  - job: Gitleaks
-    displayName: 'Run Gitleaks'
-
-    steps:
+      clean: false
+      fetchDepth: 1
 
     - powershell: |
 
-        Write-Host "Checking Gitleaks..."
+        Write-Host "=============================================="
+        Write-Host "1. CHECKOUT"
+        Write-Host "=============================================="
+
+        Write-Host "Source directory:"
+        Write-Host "$(Build.SourcesDirectory)"
+
+        git --version
+
+        Write-Host "Repository checkout completed."
+
+      displayName: '1. Checkout'
+
+
+    # ========================================================
+    # 2. GITLEAKS SECURITY SCAN
+    # ========================================================
+
+    - powershell: |
+
+        Write-Host "=============================================="
+        Write-Host "2. GITLEAKS SECURITY SCAN"
+        Write-Host "=============================================="
 
         gitleaks version
 
         if ($LASTEXITCODE -ne 0) {
-            throw "Gitleaks is not available."
+            throw "Gitleaks is not available on the agent."
         }
 
-      displayName: 'Verify Gitleaks'
-
-
-    - powershell: |
-
-        Write-Host "Running Gitleaks diagnostic scan..."
-
         $report = "$(Build.ArtifactStagingDirectory)\gitleaks.sarif"
+
+        Write-Host "Running Gitleaks..."
 
         gitleaks dir "$(Build.SourcesDirectory)" `
           --redact `
@@ -101,39 +122,31 @@ stages:
 
         Write-Host "Gitleaks scan completed."
 
-      displayName: 'Gitleaks Scan'
+      displayName: '2. Security Scan - Gitleaks'
 
 
-    - task: PublishPipelineArtifact@1
-      displayName: 'Publish Gitleaks Report'
-      inputs:
-        targetPath: '$(Build.ArtifactStagingDirectory)\gitleaks.sarif'
-        artifact: 'gitleaks-report'
-
-
-# ============================================================
-# 3. TEST BACKEND
-# ============================================================
-- stage: TestBackend
-  displayName: '3. Test Backend'
-  dependsOn: SecurityScan
-
-  jobs:
-  - job: BackendTests
-    displayName: 'Run Backend Tests'
-
-    steps:
+    # ========================================================
+    # 3. TEST BACKEND
+    # ========================================================
 
     - powershell: |
 
-        $env:JAVA_HOME = "$(JAVA17_HOME)"
-        $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
+        Write-Host "=============================================="
+        Write-Host "3. TEST BACKEND"
+        Write-Host "=============================================="
 
-        Write-Host "JAVA_HOME = $env:JAVA_HOME"
+        $env:JAVA_HOME = "$(JAVA17_HOME)"
+        $env:PATH = "$env:JAVA_HOME\bin;$(MAVEN_HOME)\bin;$env:PATH"
 
         if (-not (Test-Path "$env:JAVA_HOME\bin\java.exe")) {
-            throw "Java 17 was not found at $env:JAVA_HOME"
+            throw "Java 17 not found: $env:JAVA_HOME"
         }
+
+        if (-not (Test-Path "$(MAVEN_HOME)\bin\mvn.cmd")) {
+            throw "Maven not found: $(MAVEN_HOME)"
+        }
+
+        Write-Host "JAVA_HOME = $env:JAVA_HOME"
 
         java -version
         mvn -version
@@ -141,41 +154,27 @@ stages:
         mvn test
 
         if ($LASTEXITCODE -ne 0) {
-            throw "Backend tests failed with exit code $LASTEXITCODE"
+            throw "Backend tests failed."
         }
 
         Write-Host "Backend tests completed successfully."
 
       workingDirectory: '$(Build.SourcesDirectory)\backend'
-      displayName: 'Maven Unit Tests'
+      displayName: '3. Test Backend'
 
 
-# ============================================================
-# 4. BUILD BACKEND
-# ============================================================
-- stage: BuildBackend
-  displayName: '4. Build Backend'
-  dependsOn: TestBackend
-
-  jobs:
-  - job: BackendBuild
-    displayName: 'Build Spring Boot Backend'
-
-    steps:
+    # ========================================================
+    # 4. BUILD BACKEND
+    # ========================================================
 
     - powershell: |
 
+        Write-Host "=============================================="
+        Write-Host "4. BUILD BACKEND"
+        Write-Host "=============================================="
+
         $env:JAVA_HOME = "$(JAVA17_HOME)"
-        $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
-
-        Write-Host "JAVA_HOME = $env:JAVA_HOME"
-
-        if (-not (Test-Path "$env:JAVA_HOME\bin\java.exe")) {
-            throw "Java 17 was not found at $env:JAVA_HOME"
-        }
-
-        java -version
-        mvn -version
+        $env:PATH = "$env:JAVA_HOME\bin;$(MAVEN_HOME)\bin;$env:PATH"
 
         mvn clean package -DskipTests
 
@@ -190,49 +189,34 @@ stages:
         }
 
         if (-not (Test-Path "$(Build.SourcesDirectory)\backend\target\classes")) {
-            throw "Backend target\classes directory was not created."
+            throw "backend\target\classes was not created."
         }
 
         Write-Host "Backend build completed successfully."
 
       workingDirectory: '$(Build.SourcesDirectory)\backend'
-      displayName: 'Maven Backend Build'
+      displayName: '4. Build Backend'
 
 
-    - task: PublishPipelineArtifact@1
-      displayName: 'Publish Backend Build'
-      inputs:
-        targetPath: '$(Build.SourcesDirectory)\backend\target'
-        artifact: 'backend-build'
-
-
-# ============================================================
-# 5. BUILD FRONTEND
-# ============================================================
-- stage: BuildFrontend
-  displayName: '5. Build Frontend'
-  dependsOn: BuildBackend
-
-  jobs:
-  - job: FrontendBuild
-    displayName: 'Build React Frontend'
-
-    steps:
+    # ========================================================
+    # 5. BUILD FRONTEND
+    # ========================================================
 
     - powershell: |
 
-        Write-Host "Node version:"
-        node -v
+        Write-Host "=============================================="
+        Write-Host "5. BUILD FRONTEND"
+        Write-Host "=============================================="
 
-        Write-Host "NPM version:"
+        node -v
         npm -v
 
         Write-Host "Installing frontend dependencies..."
 
-        npm install
+        npm ci --prefer-offline
 
         if ($LASTEXITCODE -ne 0) {
-            throw "npm install failed."
+            throw "Frontend npm ci failed."
         }
 
         Write-Host "Building frontend..."
@@ -252,39 +236,15 @@ stages:
         Write-Host "Frontend build completed successfully."
 
       workingDirectory: '$(Build.SourcesDirectory)\frontend'
-      displayName: 'NPM Install and Build'
+      displayName: '5. Build Frontend'
 
 
-    - task: PublishPipelineArtifact@1
-      displayName: 'Publish Frontend Renderer'
-      inputs:
-        targetPath: '$(Build.SourcesDirectory)\electron\renderer'
-        artifact: 'frontend-renderer'
-
-
-# ============================================================
-# 6. SONARQUBE ANALYSIS
-# ============================================================
-- stage: SonarQubeAnalysis
-  displayName: '6. SonarQube Analysis'
-  dependsOn: BuildFrontend
-
-  jobs:
-  - job: Sonar
-    displayName: 'Run SonarQube Analysis'
-
-    steps:
-
-    - task: DownloadPipelineArtifact@2
-      displayName: 'Download Backend Build'
-      inputs:
-        buildType: 'current'
-        artifactName: 'backend-build'
-        targetPath: '$(Build.SourcesDirectory)\backend\target'
-
+    # ========================================================
+    # 6. SONARQUBE ANALYSIS
+    # ========================================================
 
     - task: SonarQubePrepare@8
-      displayName: 'Prepare SonarQube Analysis'
+      displayName: '6. Prepare SonarQube Analysis'
       inputs:
         SonarQube: 'NaukriAutomator-SC'
         scannerMode: 'cli'
@@ -299,6 +259,26 @@ stages:
           sonar.qualitygate.wait=true
 
 
+    - powershell: |
+
+        Write-Host "=============================================="
+        Write-Host "6. SONARQUBE ANALYSIS"
+        Write-Host "=============================================="
+
+        $env:JAVA_HOME = "$(JAVA21_HOME)"
+        $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
+
+        if (-not (Test-Path "$env:JAVA_HOME\bin\java.exe")) {
+            throw "Java 21 not found: $env:JAVA_HOME"
+        }
+
+        Write-Host "Using Java 21 for SonarQube."
+
+        java -version
+
+      displayName: 'Configure Java 21 for SonarQube'
+
+
     - task: SonarQubeAnalyze@8
       displayName: 'Run SonarQube Scanner'
       inputs:
@@ -311,48 +291,37 @@ stages:
         pollingTimeoutSec: '600'
 
 
-# ============================================================
-# 7. QUALITY GATE
-# ============================================================
-- stage: QualityGate
-  displayName: '7. Quality Gate'
-  dependsOn: SonarQubeAnalysis
-
-  jobs:
-  - job: QualityGate
-    displayName: 'Verify SonarQube Quality Gate'
-
-    steps:
+    # ========================================================
+    # 7. QUALITY GATE
+    # ========================================================
 
     - powershell: |
 
+        Write-Host "=============================================="
+        Write-Host "7. QUALITY GATE"
+        Write-Host "=============================================="
+
         Write-Host "SonarQube Quality Gate passed."
 
-      displayName: 'Quality Gate Passed'
+      displayName: '7. Quality Gate'
 
 
-# ============================================================
-# 8. TERRAFORM VALIDATE
-# ============================================================
-- stage: TerraformValidate
-  displayName: '8. Terraform Validate'
-  dependsOn: QualityGate
-
-  jobs:
-  - job: TerraformValidation
-    displayName: 'Validate Terraform'
-
-    steps:
+    # ========================================================
+    # 8. TERRAFORM VALIDATE
+    # ========================================================
 
     - task: AzureCLI@3
-      displayName: 'Terraform Init and Validate'
+      displayName: '8. Terraform Init and Validate'
       inputs:
         azureSubscription: 'Qwerty-Service-Connection'
         scriptType: 'ps'
         scriptLocation: 'inlineScript'
         inlineScript: |
 
-          Write-Host "Terraform version:"
+          Write-Host "=============================================="
+          Write-Host "8. TERRAFORM VALIDATE"
+          Write-Host "=============================================="
+
           terraform version
 
           if (-not (Test-Path "$(TERRAFORM_DIR)")) {
@@ -376,46 +345,25 @@ stages:
           Write-Host "Terraform validation completed successfully."
 
 
-# ============================================================
-# 9. TERRAFORM INFRASTRUCTURE
-# ============================================================
-- stage: TerraformInfrastructure
-  displayName: '9. Terraform Infrastructure'
-  dependsOn: TerraformValidate
-
-  jobs:
-  - job: TerraformApply
-    displayName: 'Terraform Plan and Apply'
-
-    steps:
+    # ========================================================
+    # 9. TERRAFORM INFRASTRUCTURE
+    # ========================================================
 
     - task: AzureCLI@3
-      displayName: 'Terraform Plan and Apply'
+      displayName: '9. Terraform Plan and Apply'
       inputs:
         azureSubscription: 'Qwerty-Service-Connection'
         scriptType: 'ps'
         scriptLocation: 'inlineScript'
         inlineScript: |
 
-          Write-Host "Azure account:"
+          Write-Host "=============================================="
+          Write-Host "9. TERRAFORM INFRASTRUCTURE"
+          Write-Host "=============================================="
+
           az account show
 
-          Write-Host "Terraform version:"
-          terraform version
-
           Set-Location "$(TERRAFORM_DIR)"
-
-          terraform init
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "Terraform init failed."
-          }
-
-          terraform validate
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "Terraform validation failed."
-          }
 
           terraform plan -out=tfplan
 
@@ -432,64 +380,77 @@ stages:
           Write-Host "Terraform infrastructure completed successfully."
 
 
-# ============================================================
-# 10. BUILD ELECTRON
-#
-# IMPORTANT:
-# - No build.ps1
-# - No backend rebuild
-# - No frontend rebuild
-# - No mock
-#
-# Backend and frontend are already built in previous stages.
-# ============================================================
-- stage: BuildElectron
-  displayName: '10. Build Electron'
-  dependsOn: TerraformInfrastructure
+    # ========================================================
+    # 10. BUILD ELECTRON
+    #
+    # IMPORTANT:
+    # - No build.ps1
+    # - No backend rebuild
+    # - No frontend rebuild
+    # - No mock
+    #
+    # Backend + frontend are already available in this SAME JOB.
+    # ========================================================
 
-  jobs:
-  - job: ElectronBuild
-    displayName: 'Build Windows Electron Application'
-
-    steps:
-
-    # ----------------------------------------------------------
-    # Download backend build
-    # ----------------------------------------------------------
-    - task: DownloadPipelineArtifact@2
-      displayName: 'Download Backend Build'
-      inputs:
-        buildType: 'current'
-        artifactName: 'backend-build'
-        targetPath: '$(Build.SourcesDirectory)\backend\target'
-
-
-    # ----------------------------------------------------------
-    # Download frontend renderer
-    # ----------------------------------------------------------
-    - task: DownloadPipelineArtifact@2
-      displayName: 'Download Frontend Renderer'
-      inputs:
-        buildType: 'current'
-        artifactName: 'frontend-renderer'
-        targetPath: '$(Build.SourcesDirectory)\electron\renderer'
-
-
-    # ----------------------------------------------------------
-    # Install application JRE
-    # ----------------------------------------------------------
     - powershell: |
 
-        Write-Host "Installing application JRE..."
+        Write-Host "=============================================="
+        Write-Host "10. BUILD ELECTRON"
+        Write-Host "=============================================="
 
-        $env:JAVA_HOME = "$(JAVA17_HOME)"
-        $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
+        $javaHome = "$(JAVA17_HOME)"
 
-        if (-not (Test-Path "$env:JAVA_HOME\bin\java.exe")) {
-            throw "Java 17 was not found."
+        if (-not (Test-Path "$javaHome\bin\java.exe")) {
+            throw "Java 17 not found: $javaHome"
         }
 
+        $env:JAVA_HOME = $javaHome
+        $env:PATH = "$javaHome\bin;$(MAVEN_HOME)\bin;$env:PATH"
+
+        Write-Host "Java:"
         java -version
+
+        Write-Host ""
+        Write-Host "Node:"
+        node -v
+
+        Write-Host ""
+        Write-Host "NPM:"
+        npm -v
+
+        Write-Host ""
+        Write-Host "Maven:"
+        mvn -version
+
+
+        # ------------------------------------------------------
+        # Verify backend
+        # ------------------------------------------------------
+
+        if (-not (Test-Path "$(Build.SourcesDirectory)\backend\target\classes")) {
+            throw "Backend build output is missing."
+        }
+
+        Write-Host "Backend output verified."
+
+
+        # ------------------------------------------------------
+        # Verify frontend
+        # ------------------------------------------------------
+
+        if (-not (Test-Path "$(Build.SourcesDirectory)\electron\renderer\index.html")) {
+            throw "Frontend renderer is missing."
+        }
+
+        Write-Host "Frontend renderer verified."
+
+
+        # ------------------------------------------------------
+        # Install application JRE
+        # ------------------------------------------------------
+
+        Write-Host ""
+        Write-Host "Installing application JRE..."
 
         $fetchJre = "$(Build.SourcesDirectory)\build\fetch-jre.ps1"
 
@@ -500,62 +461,26 @@ stages:
         & $fetchJre
 
         if ($LASTEXITCODE -ne 0) {
-            throw "JRE installation failed."
+            throw "Application JRE installation failed."
         }
 
-        if (-not (Test-Path "$(Build.SourcesDirectory)\electron\resources\jre")) {
+        $jrePath = "$(Build.SourcesDirectory)\electron\resources\jre"
+
+        if (-not (Test-Path $jrePath)) {
             throw "Application JRE was not created."
         }
 
-        Write-Host "Application JRE installed successfully."
-
-      displayName: 'Install Application JRE'
+        Write-Host "Application JRE installed."
 
 
-    # ----------------------------------------------------------
-    # Install Playwright Chromium
-    # ----------------------------------------------------------
-    - powershell: |
+        # ------------------------------------------------------
+        # Install Playwright
+        # ------------------------------------------------------
 
+        Write-Host ""
         Write-Host "Installing Playwright Chromium..."
 
-        $env:JAVA_HOME = "$(JAVA17_HOME)"
-        $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
-
-        if (-not (Test-Path "$env:JAVA_HOME\bin\java.exe")) {
-            throw "Java 17 was not found."
-        }
-
-        java -version
-
-        # Maven used by install-playwright.ps1
-        $wrapperDir = "$(Build.SourcesDirectory)\.pipeline-tools"
-
-        New-Item `
-          -ItemType Directory `
-          -Force `
-          -Path $wrapperDir | Out-Null
-
-        $realMaven = "C:\Program Files\Java\apache-maven-3.10.0-rc-1\bin\mvn.cmd"
-
-        if (-not (Test-Path $realMaven)) {
-            throw "Maven not found: $realMaven"
-        }
-
-        $mvnWrapper = Join-Path $wrapperDir "mvn.cmd"
-
-        @(
-          '@echo off'
-          'set "JAVA_HOME=C:\Program Files\Java\jdk-17"'
-          'set "PATH=%JAVA_HOME%\bin;%PATH%"'
-          'call "C:\Program Files\Java\apache-maven-3.10.0-rc-1\bin\mvn.cmd" %*'
-          'exit /b %ERRORLEVEL%'
-        ) | Set-Content -Path $mvnWrapper -Encoding ASCII
-
-        $env:PATH = "$wrapperDir;$env:PATH"
-
-        Write-Host "Maven resolution:"
-        where.exe mvn
+        $playwrightPath = "$(Build.SourcesDirectory)\electron\resources\playwright"
 
         $installPlaywright = "$(Build.SourcesDirectory)\build\install-playwright.ps1"
 
@@ -563,69 +488,60 @@ stages:
             throw "install-playwright.ps1 not found."
         }
 
+
+        # Force Maven to use Java 17.
+        #
+        # The project script calls "mvn", therefore put the
+        # known Maven installation first in PATH.
+
+        $env:PATH = "$(MAVEN_HOME)\bin;$env:PATH"
+
+        Write-Host "Maven resolution:"
+        where.exe mvn
+
+
+        # Playwright browser location
+        $env:PLAYWRIGHT_BROWSERS_PATH = $playwrightPath
+
+        New-Item `
+          -ItemType Directory `
+          -Force `
+          -Path $playwrightPath | Out-Null
+
         & $installPlaywright
 
         if ($LASTEXITCODE -ne 0) {
             throw "Playwright installation failed."
         }
 
-        if (-not (Test-Path "$(Build.SourcesDirectory)\electron\resources\playwright")) {
+        if (-not (Test-Path $playwrightPath)) {
             throw "Playwright resources were not created."
         }
 
-        Write-Host "Playwright Chromium installed successfully."
-
-      displayName: 'Install Playwright Chromium'
+        Write-Host "Playwright Chromium installed."
 
 
-    # ----------------------------------------------------------
-    # Electron packaging
-    # ----------------------------------------------------------
-    - powershell: |
-
-        Write-Host "===== Building Electron Application ====="
+        # ------------------------------------------------------
+        # Electron dependencies
+        # ------------------------------------------------------
 
         Set-Location "$(Build.SourcesDirectory)\electron"
 
-        node -v
-        npm -v
-
-        # ------------------------------------------------------
-        # Verify previous build outputs
-        # ------------------------------------------------------
-
-        if (-not (Test-Path "$(Build.SourcesDirectory)\backend\target\classes")) {
-            throw "Backend build output is missing."
-        }
-
-        if (-not (Test-Path "$(Build.SourcesDirectory)\electron\renderer\index.html")) {
-            throw "Frontend renderer is missing."
-        }
-
-        if (-not (Test-Path "$(Build.SourcesDirectory)\electron\resources\jre")) {
-            throw "Application JRE is missing."
-        }
-
-        if (-not (Test-Path "$(Build.SourcesDirectory)\electron\resources\playwright")) {
-            throw "Playwright resources are missing."
-        }
-
-        # ------------------------------------------------------
-        # Install Electron dependencies
-        # ------------------------------------------------------
-
+        Write-Host ""
         Write-Host "Installing Electron dependencies..."
 
-        npm install
+        npm ci --prefer-offline
 
         if ($LASTEXITCODE -ne 0) {
-            throw "Electron npm install failed."
+            throw "Electron npm ci failed."
         }
 
+
         # ------------------------------------------------------
-        # Package Electron
+        # Electron packaging
         # ------------------------------------------------------
 
+        Write-Host ""
         Write-Host "Running Electron Builder..."
 
         npm run dist
@@ -634,84 +550,52 @@ stages:
             throw "Electron packaging failed."
         }
 
+
         # ------------------------------------------------------
-        # Verify dist
+        # Verify generated EXE
         # ------------------------------------------------------
 
         $distDir = "$(Build.SourcesDirectory)\dist"
 
         if (-not (Test-Path $distDir)) {
-            throw "Electron dist directory was not created: $distDir"
+            throw "Electron dist directory was not created."
         }
 
         Write-Host ""
-        Write-Host "Generated Electron files:"
-
-        Get-ChildItem `
-          $distDir `
-          -Recurse |
-          Select-Object FullName, Length
-
-        Write-Host ""
-        Write-Host "Electron packaging completed successfully."
-
-      displayName: 'Package Electron'
-
-
-    # ----------------------------------------------------------
-    # IMPORTANT:
-    # Stage 11 is a different job.
-    # Publish dist so Stage 11 can download it.
-    # ----------------------------------------------------------
-    - task: PublishPipelineArtifact@1
-      displayName: 'Publish Electron Dist'
-      inputs:
-        targetPath: '$(Build.SourcesDirectory)\dist'
-        artifact: 'electron-dist'
-
-
-# ============================================================
-# 11. ARCHIVE EXE + UPLOAD AZURE BLOB
-# ============================================================
-- stage: PublishAndUpload
-  displayName: '11. Archive EXE and Upload Azure Blob'
-  dependsOn: BuildElectron
-
-  jobs:
-  - job: Publish
-    displayName: 'Publish Windows EXE'
-
-    steps:
-
-    # ----------------------------------------------------------
-    # Download Electron dist generated in Stage 10
-    # ----------------------------------------------------------
-    - task: DownloadPipelineArtifact@2
-      displayName: 'Download Electron Dist'
-      inputs:
-        buildType: 'current'
-        artifactName: 'electron-dist'
-        targetPath: '$(Build.SourcesDirectory)\dist'
-
-
-    # ----------------------------------------------------------
-    # Verify EXE
-    # ----------------------------------------------------------
-    - powershell: |
-
-        Write-Host "Searching generated EXE..."
-
-        $distDir = "$(Build.SourcesDirectory)\dist"
-
-        if (-not (Test-Path $distDir)) {
-            throw "dist directory does not exist: $distDir"
-        }
+        Write-Host "Generated EXE files:"
 
         Get-ChildItem `
           $distDir `
           -Filter "*.exe" `
           -Recurse |
           Select-Object FullName, Length
+
+
+        $expectedExe = "$(ELECTRON_EXE)"
+
+        if (-not (Test-Path $expectedExe)) {
+            throw "Expected EXE was not created: $expectedExe"
+        }
+
+        Write-Host ""
+        Write-Host "Expected EXE found:"
+        Write-Host $expectedExe
+
+        Write-Host ""
+        Write-Host "ELECTRON BUILD SUCCESSFUL."
+
+      displayName: '10. Build Electron'
+
+
+    # ========================================================
+    # 11. ARCHIVE EXE + UPLOAD AZURE BLOB
+    # ========================================================
+
+    - powershell: |
+
+        Write-Host "=============================================="
+        Write-Host "11. ARCHIVE EXE"
+        Write-Host "=============================================="
 
         $exe = "$(ELECTRON_EXE)"
 
@@ -721,49 +605,89 @@ stages:
 
         $fileInfo = Get-Item $exe
 
-        Write-Host ""
-        Write-Host "EXE found:"
+        Write-Host "EXE:"
         Write-Host $exe
-        Write-Host "Size: $($fileInfo.Length) bytes"
 
-      displayName: 'Verify EXE'
+        Write-Host "Size:"
+        Write-Host "$($fileInfo.Length) bytes"
+
+      displayName: '11. Verify EXE'
 
 
-    # ----------------------------------------------------------
-    # Publish Azure DevOps artifact
-    # ----------------------------------------------------------
     - task: PublishPipelineArtifact@1
-      displayName: 'Publish NaukriAutomator EXE'
+      displayName: 'Archive NaukriAutomator EXE'
       inputs:
         targetPath: '$(ELECTRON_EXE)'
         artifact: 'NaukriAutomator-EXE'
 
 
-    # ----------------------------------------------------------
-    # Upload to Azure Blob
-    # ----------------------------------------------------------
     - task: AzureCLI@3
-      displayName: 'Upload EXE to Azure Blob'
+      displayName: '11. Upload EXE to Azure Blob'
       inputs:
         azureSubscription: 'Qwerty-Service-Connection'
         scriptType: 'ps'
         scriptLocation: 'inlineScript'
         inlineScript: |
 
+          Write-Host "=============================================="
+          Write-Host "11. AZURE BLOB UPLOAD"
+          Write-Host "=============================================="
+
           $source = "$(ELECTRON_EXE)"
+          $account = "$(AZURE_STORAGE_ACCOUNT)"
+          $container = "$(AZURE_STORAGE_CONTAINER)"
           $blobName = "NaukriAutomator-$(Build.BuildId).exe"
 
-          Write-Host "Uploading:"
-          Write-Host "Source : $source"
-          Write-Host "Blob   : $blobName"
+          if (-not (Test-Path $source)) {
+              throw "EXE not found: $source"
+          }
+
+          Write-Host "Source    : $source"
+          Write-Host "Storage   : $account"
+          Write-Host "Container : $container"
+          Write-Host "Blob      : $blobName"
+
+
+          # ----------------------------------------------------
+          # Get storage account key.
+          #
+          # This avoids requiring:
+          # Storage Blob Data Contributor
+          #
+          # The Azure service connection needs permission to
+          # read storage account keys.
+          # ----------------------------------------------------
+
+          Write-Host ""
+          Write-Host "Getting storage account key..."
+
+          $storageKey = az storage account keys list `
+            --account-name "$account" `
+            --query "[0].value" `
+            --output tsv
+
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($storageKey)) {
+              throw "Unable to retrieve storage account key."
+          }
+
+          Write-Host "Storage account key retrieved."
+
+
+          # ----------------------------------------------------
+          # Upload
+          # ----------------------------------------------------
+
+          Write-Host ""
+          Write-Host "Uploading EXE..."
 
           az storage blob upload `
-            --account-name "$(AZURE_STORAGE_ACCOUNT)" `
-            --container-name "$(AZURE_STORAGE_CONTAINER)" `
+            --account-name "$account" `
+            --account-key "$storageKey" `
+            --container-name "$container" `
             --name "$blobName" `
             --file "$source" `
-            --auth-mode login `
-            --overwrite
+            --overwrite `
+            --output none
 
           if ($LASTEXITCODE -ne 0) {
               throw "Azure Blob upload failed."
@@ -773,45 +697,74 @@ stages:
           Write-Host "Azure Blob upload completed successfully."
 
 
-# ============================================================
-# 12. DEPLOYMENT VERIFICATION
-# ============================================================
-- stage: DeploymentVerification
-  displayName: '12. Deployment Verification'
-  dependsOn: PublishAndUpload
-
-  jobs:
-  - job: VerifyDeployment
-    displayName: 'Verify Azure Blob Deployment'
-
-    steps:
+    # ========================================================
+    # 12. DEPLOYMENT VERIFICATION
+    # ========================================================
 
     - task: AzureCLI@3
-      displayName: 'Verify EXE in Azure Blob'
+      displayName: '12. Deployment Verification'
       inputs:
         azureSubscription: 'Qwerty-Service-Connection'
         scriptType: 'ps'
         scriptLocation: 'inlineScript'
         inlineScript: |
 
+          Write-Host "=============================================="
+          Write-Host "12. DEPLOYMENT VERIFICATION"
+          Write-Host "=============================================="
+
+          $account = "$(AZURE_STORAGE_ACCOUNT)"
+          $container = "$(AZURE_STORAGE_CONTAINER)"
           $blobName = "NaukriAutomator-$(Build.BuildId).exe"
 
-          Write-Host "Checking deployed blob:"
+
+          # ----------------------------------------------------
+          # Get storage account key
+          # ----------------------------------------------------
+
+          Write-Host "Getting storage account key..."
+
+          $storageKey = az storage account keys list `
+            --account-name "$account" `
+            --query "[0].value" `
+            --output tsv
+
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($storageKey)) {
+              throw "Unable to retrieve storage account key."
+          }
+
+
+          # ----------------------------------------------------
+          # Verify blob
+          # ----------------------------------------------------
+
+          Write-Host ""
+          Write-Host "Checking blob:"
           Write-Host $blobName
 
-          az storage blob show `
-            --account-name "$(AZURE_STORAGE_ACCOUNT)" `
-            --container-name "$(AZURE_STORAGE_CONTAINER)" `
+          $blob = az storage blob show `
+            --account-name "$account" `
+            --account-key "$storageKey" `
+            --container-name "$container" `
             --name "$blobName" `
-            --auth-mode login `
-            --output table
+            --output json
 
           if ($LASTEXITCODE -ne 0) {
-              throw "Deployment verification failed."
+              throw "Deployment verification failed. Blob not found."
           }
+
+          if ([string]::IsNullOrWhiteSpace($blob)) {
+              throw "Deployment verification failed. Blob information is empty."
+          }
+
+          Write-Host ""
+          Write-Host "Blob found successfully."
 
           Write-Host ""
           Write-Host "=============================================="
           Write-Host " DEPLOYMENT VERIFICATION SUCCESSFUL"
-          Write-Host " Blob: $blobName"
           Write-Host "=============================================="
+
+          Write-Host "Storage Account : $account"
+          Write-Host "Container       : $container"
+          Write-Host "Blob            : $blobName"
