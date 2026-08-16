@@ -273,9 +273,15 @@ stages:
 
         Write-Host "Installing Electron dependencies..."
 
-        cd "$(Build.SourcesDirectory)\electron"
+        Set-Location "$(Build.SourcesDirectory)\electron"
 
         npm ci
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Electron dependency installation failed with exit code $LASTEXITCODE"
+        }
+
+        Write-Host "Electron dependencies installed successfully."
 
       displayName: 'Install Electron Dependencies'
 
@@ -284,15 +290,28 @@ stages:
 
         Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
-        & "$(Build.SourcesDirectory)\build\build.ps1" -Variant Ship
+        # Initialize LASTEXITCODE so build.ps1 can safely access it
+        $global:LASTEXITCODE = 0
 
-        if ($LASTEXITCODE -ne 0) {
-            throw "Electron build failed."
+        $buildScript = "$(Build.SourcesDirectory)\build\build.ps1"
+
+        if (-not (Test-Path $buildScript)) {
+            throw "Build script not found: $buildScript"
         }
+
+        Write-Host "Build script: $buildScript"
+
+        & $buildScript -Variant Ship
+
+        if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+            throw "NaukriAutomator Ship build failed with exit code $LASTEXITCODE"
+        }
+
+        Write-Host "NaukriAutomator Ship build completed successfully."
 
       displayName: 'Build Electron Ship Variant'
 
-
+      
 # ============================================================
 # 11. ARCHIVE EXE + UPLOAD AZURE BLOB
 # ============================================================
