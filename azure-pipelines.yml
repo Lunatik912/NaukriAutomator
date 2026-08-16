@@ -596,7 +596,6 @@ stages:
 
           Write-Host "Azure Blob upload completed successfully."
 
-      displayName: '12. Upload EXE to Azure Blob'
 
 
     - task: AzureCLI@3
@@ -645,4 +644,3 @@ stages:
 
           Write-Host "Blob: $blobName"
 
-      displayName: '13. Verify Deployment'
