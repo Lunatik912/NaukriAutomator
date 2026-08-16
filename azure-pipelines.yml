@@ -350,7 +350,7 @@ stages:
     - task: AzureCLI@3
       displayName: 'Upload EXE to Azure Blob'
       inputs:
-        azureSubscription: 'YOUR_AZURE_RESOURCE_MANAGER_SERVICE_CONNECTION'
+        azureSubscription: 'Qwerty-Service-Connection'
         scriptType: 'ps'
         scriptLocation: 'inlineScript'
         inlineScript: |
@@ -391,7 +391,7 @@ stages:
     - task: AzureCLI@3
       displayName: 'Verify EXE in Azure Blob'
       inputs:
-        azureSubscription: 'YOUR_AZURE_RESOURCE_MANAGER_SERVICE_CONNECTION'
+        azureSubscription: 'Qwerty-Service-Connection'
         scriptType: 'ps'
         scriptLocation: 'inlineScript'
         inlineScript: |
