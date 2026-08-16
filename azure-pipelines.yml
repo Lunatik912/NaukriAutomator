@@ -388,6 +388,7 @@ stages:
 
         $playwrightCache = "$(PLAYWRIGHT_CACHE_DIR)"
         $playwrightTarget = "$(ELECTRON_DIR)\resources\playwright"
+        $pom = "$(Build.SourcesDirectory)\backend\pom.xml"
 
         New-Item `
           -ItemType Directory `
@@ -398,6 +399,10 @@ stages:
           -ItemType Directory `
           -Force `
           -Path "$(ELECTRON_DIR)\resources" | Out-Null
+
+        if (-not (Test-Path $pom)) {
+            throw "Backend pom.xml not found: $pom"
+        }
 
         if (Test-Path $playwrightCache) {
 
@@ -438,7 +443,13 @@ stages:
 
             $env:PLAYWRIGHT_BROWSERS_PATH = $playwrightTarget
 
-            mvn -B -e exec:java `
+            Write-Host "Using POM: $pom"
+            Write-Host "PLAYWRIGHT_BROWSERS_PATH: $playwrightTarget"
+
+            mvn -f "$pom" `
+              -B `
+              -e `
+              exec:java `
               "-Dexec.mainClass=com.microsoft.playwright.CLI" `
               "-Dexec.args=install chromium"
 
@@ -597,7 +608,6 @@ stages:
           Write-Host "Azure Blob upload completed successfully."
 
 
-
     - task: AzureCLI@3
       displayName: '13. Verify Azure Blob Deployment'
       inputs:
@@ -643,4 +653,3 @@ stages:
           Write-Host "=============================================="
 
           Write-Host "Blob: $blobName"
-
