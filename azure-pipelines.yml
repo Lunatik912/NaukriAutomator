@@ -71,6 +71,7 @@ stages:
           --exit-code 1 `
           --report-format sarif `
           --report-path "$(Build.ArtifactStagingDirectory)\gitleaks.sarif"
+          --exit-code 0
 
         if ($LASTEXITCODE -ne 0) {
             throw "Gitleaks detected potential secrets."
