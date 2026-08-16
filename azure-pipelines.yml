@@ -286,28 +286,74 @@ stages:
       displayName: 'Install Electron Dependencies'
 
 
-    - powershell: |
+        - powershell: |
         Write-Host "Starting NaukriAutomator Ship build..."
 
         Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
-        # ====================================================
-        # Configure Java 17 for the complete build process
-        # ====================================================
-        $env:JAVA_HOME = "$(JAVA17_HOME)"
-        $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
+        # ============================================================
+        # Configure Java 17
+        # ============================================================
+        $javaHome = "C:\Program Files\Java\jdk-17"
+
+        if (-not (Test-Path "$javaHome\bin\java.exe")) {
+            throw "Java 17 not found at: $javaHome"
+        }
+
+        $env:JAVA_HOME = $javaHome
+        $env:PATH = "$javaHome\bin;$env:PATH"
 
         Write-Host "JAVA_HOME = $env:JAVA_HOME"
 
         java -version
         mvn -version
 
-        # ====================================================
+        # ============================================================
         # Initialize LASTEXITCODE because build.ps1 uses
-        # Set-StrictMode and checks LASTEXITCODE internally.
-        # ====================================================
+        # Set-StrictMode and accesses LASTEXITCODE.
+        # ============================================================
         $global:LASTEXITCODE = 0
 
+        # ============================================================
+        # Create temporary Maven wrapper
+        #
+        # install-playwright.ps1 calls "mvn".
+        # This wrapper guarantees JAVA_HOME is set before Maven runs.
+        # ============================================================
+        $wrapperDir = "$(Build.SourcesDirectory)\.pipeline-tools"
+
+        New-Item -ItemType Directory -Force -Path $wrapperDir | Out-Null
+
+        $realMaven = "C:\Program Files\Java\apache-maven-3.10.0-rc-1\bin\mvn.cmd"
+
+        if (-not (Test-Path $realMaven)) {
+            throw "Maven executable not found at: $realMaven"
+        }
+
+        $mvnWrapper = Join-Path $wrapperDir "mvn.cmd"
+
+        @"
+@echo off
+set "JAVA_HOME=C:\Program Files\Java\jdk-17"
+set "PATH=%JAVA_HOME%\bin;%PATH%"
+call "$realMaven" %*
+exit /b %ERRORLEVEL%
+"@ | Set-Content -Path $mvnWrapper -Encoding ASCII
+
+        # Put wrapper FIRST in PATH
+        $env:PATH = "$wrapperDir;$env:PATH"
+
+        Write-Host "Temporary Maven wrapper created:"
+        Write-Host $mvnWrapper
+
+        # Verify which Maven will be used
+        where.exe mvn
+
+        Write-Host "Starting build.ps1..."
+
+        # ============================================================
+        # Run existing project build script
+        # ============================================================
         $buildScript = "$(Build.SourcesDirectory)\build\build.ps1"
 
         if (-not (Test-Path $buildScript)) {
@@ -318,6 +364,9 @@ stages:
 
         & $buildScript -Variant Ship
 
+        # ============================================================
+        # Final exit-code validation
+        # ============================================================
         if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
             throw "NaukriAutomator Ship build failed with exit code $LASTEXITCODE"
         }
