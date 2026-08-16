@@ -19,12 +19,10 @@ variables:
   JAVA_HOME_17_X64: 'C:\Program Files\Java\jdk-17'
   JAVA_HOME_21_X64: 'C:\Program Files\Java\jdk-21.0.12'
 
-
   # ============================================================
   # MAVEN
   # ============================================================
   MAVEN_HOME: 'C:\Program Files\Java\apache-maven-3.10.0-rc-1'
-
 
   # ============================================================
   # SONARQUBE
@@ -32,19 +30,16 @@ variables:
   SONAR_PROJECT_KEY: 'NA_Jenkins_Demo'
   SONAR_PROJECT_NAME: 'NA_Jenkins_Demo'
 
-
   # ============================================================
-  # AZURE
+  # AZURE STORAGE
   # ============================================================
   AZURE_STORAGE_ACCOUNT: 'naterraformstorage01'
   AZURE_STORAGE_CONTAINER: 'nacontainer'
-
 
   # ============================================================
   # TERRAFORM
   # ============================================================
   TERRAFORM_DIR: '$(Build.SourcesDirectory)\Terraform'
-
 
   # ============================================================
   # ELECTRON
@@ -52,19 +47,21 @@ variables:
   ELECTRON_DIR: '$(Build.SourcesDirectory)\electron'
   ELECTRON_EXE: '$(Build.SourcesDirectory)\dist\NaukriAutomator 0.1.0.exe'
 
-
   # ============================================================
-  # PIPELINE CACHE
+  # PERSISTENT AGENT CACHE
+  #
+  # IMPORTANT:
+  # These are OUTSIDE Build.SourcesDirectory.
+  # Therefore checkout clean does not remove them.
   # ============================================================
-  NPM_CACHE: '$(Pipeline.Workspace)\npm-cache'
-  MAVEN_CACHE: '$(Pipeline.Workspace)\m2'
-  JRE_CACHE: '$(Pipeline.Workspace)\jre-cache'
+  APP_CACHE_DIR: '$(Agent.ToolsDirectory)\NaukriAutomatorCache'
+  JRE_CACHE_DIR: '$(Agent.ToolsDirectory)\NaukriAutomatorCache\jre'
+  PLAYWRIGHT_CACHE_DIR: '$(Agent.ToolsDirectory)\NaukriAutomatorCache\playwright'
+  NPM_CACHE_DIR: '$(Agent.ToolsDirectory)\NaukriAutomatorCache\npm'
 
 
 # ==============================================================
 # ONE CONTINUOUS JOB
-#
-# Everything runs on the same agent/workspace.
 #
 # Checkout
 #   ↓
@@ -80,15 +77,23 @@ variables:
 #   ↓
 # Quality Gate
 #   ↓
-# Terraform Validate
+# Terraform
 #   ↓
-# Terraform Apply
+# JRE
+#   ↓
+# Playwright
 #   ↓
 # Electron
 #   ↓
-# Upload
+# Azure Blob
 #   ↓
 # Verify
+#
+# NO:
+# - repeated checkout
+# - pipeline artifact download
+# - pipeline artifact upload between stages
+# - repeated workspace creation
 # ==============================================================
 
 stages:
@@ -109,7 +114,6 @@ stages:
     # ==========================================================
     # 1. CHECKOUT
     # ==========================================================
-
     - checkout: self
       clean: true
       displayName: '1. Checkout GitHub Repository'
@@ -118,7 +122,6 @@ stages:
     # ==========================================================
     # 2. GITLEAKS
     # ==========================================================
-
     - powershell: |
 
         $ErrorActionPreference = "Stop"
@@ -145,14 +148,13 @@ stages:
             throw "Gitleaks report was not generated."
         }
 
-        Write-Host "Gitleaks scan completed."
+        Write-Host "Gitleaks scan completed successfully."
 
       displayName: '2. Security Scan - Gitleaks'
 
 
     - task: PublishPipelineArtifact@1
       displayName: 'Publish Gitleaks Report'
-
       inputs:
         targetPath: '$(Build.ArtifactStagingDirectory)\gitleaks.sarif'
         artifact: 'gitleaks-report'
@@ -161,7 +163,6 @@ stages:
     # ==========================================================
     # 3. BACKEND TEST
     # ==========================================================
-
     - powershell: |
 
         $ErrorActionPreference = "Stop"
@@ -171,20 +172,14 @@ stages:
         Write-Host "=============================================="
 
         $env:JAVA_HOME = "$(JAVA17_HOME)"
-
-        $env:MAVEN_OPTS = "-Dmaven.repo.local=$(MAVEN_CACHE)"
-
         $env:PATH = "$env:JAVA_HOME\bin;$(MAVEN_HOME)\bin;$env:PATH"
 
-        Write-Host "JAVA_HOME = $env:JAVA_HOME"
-        Write-Host "Maven repository = $(MAVEN_CACHE)"
-
         if (-not (Test-Path "$env:JAVA_HOME\bin\java.exe")) {
-            throw "Java 17 was not found."
+            throw "Java 17 not found."
         }
 
         if (-not (Test-Path "$(MAVEN_HOME)\bin\mvn.cmd")) {
-            throw "Maven was not found."
+            throw "Maven not found."
         }
 
         java -version
@@ -199,14 +194,12 @@ stages:
         Write-Host "Backend tests completed successfully."
 
       workingDirectory: '$(Build.SourcesDirectory)\backend'
-
       displayName: '3. Test Backend'
 
 
     # ==========================================================
     # 4. BUILD BACKEND
     # ==========================================================
-
     - powershell: |
 
         $ErrorActionPreference = "Stop"
@@ -216,9 +209,6 @@ stages:
         Write-Host "=============================================="
 
         $env:JAVA_HOME = "$(JAVA17_HOME)"
-
-        $env:MAVEN_OPTS = "-Dmaven.repo.local=$(MAVEN_CACHE)"
-
         $env:PATH = "$env:JAVA_HOME\bin;$(MAVEN_HOME)\bin;$env:PATH"
 
         java -version
@@ -234,7 +224,8 @@ stages:
 
         Write-Host "Copying Maven dependencies..."
 
-        mvn dependency:copy-dependencies
+        mvn dependency:copy-dependencies `
+          -DoutputDirectory=target/dependency
 
         if ($LASTEXITCODE -ne 0) {
             throw "Maven dependency copy failed."
@@ -244,17 +235,19 @@ stages:
             throw "backend\target\classes was not created."
         }
 
+        if (-not (Test-Path "$(Build.SourcesDirectory)\backend\target\dependency")) {
+            throw "backend\target\dependency was not created."
+        }
+
         Write-Host "Backend build completed successfully."
 
       workingDirectory: '$(Build.SourcesDirectory)\backend'
-
       displayName: '4. Build Backend'
 
 
     # ==========================================================
     # 5. BUILD FRONTEND
     # ==========================================================
-
     - powershell: |
 
         $ErrorActionPreference = "Stop"
@@ -269,11 +262,11 @@ stages:
         New-Item `
           -ItemType Directory `
           -Force `
-          -Path "$(NPM_CACHE)" | Out-Null
+          -Path "$(NPM_CACHE_DIR)" | Out-Null
 
         Write-Host "Installing frontend dependencies..."
 
-        npm ci --cache "$(NPM_CACHE)"
+        npm ci --cache "$(NPM_CACHE_DIR)"
 
         if ($LASTEXITCODE -ne 0) {
             throw "Frontend npm ci failed."
@@ -287,64 +280,43 @@ stages:
             throw "Frontend build failed."
         }
 
-        $rendererDir = "$(Build.SourcesDirectory)\electron\renderer"
-
-        if (-not (Test-Path "$rendererDir\index.html")) {
-            throw "Frontend renderer was not created."
+        if (-not (Test-Path "$(ELECTRON_DIR)\renderer\index.html")) {
+            throw "Frontend renderer was not generated."
         }
 
         Write-Host "Frontend build completed successfully."
 
       workingDirectory: '$(Build.SourcesDirectory)\frontend'
-
       displayName: '5. Build Frontend'
 
 
     # ==========================================================
     # 6. SONARQUBE
     # ==========================================================
-
     - task: SonarQubePrepare@8
-
       displayName: '6. Prepare SonarQube Analysis'
-
       inputs:
-
         SonarQube: 'NaukriAutomator-SC'
-
         scannerMode: 'cli'
-
         configMode: 'manual'
-
         cliProjectKey: '$(SONAR_PROJECT_KEY)'
-
         cliProjectName: '$(SONAR_PROJECT_NAME)'
-
         cliSources: '.'
-
         extraProperties: |
-
           sonar.sources=backend/src,frontend/src
-
           sonar.java.binaries=backend/target/classes
-
           sonar.java.libraries=backend/target/dependency/*.jar
-
           sonar.qualitygate.wait=true
 
 
     - task: SonarQubeAnalyze@8
-
       displayName: '6. Run SonarQube Scanner'
-
       inputs:
         jdkversion: 'JAVA_HOME_21_X64'
 
 
     - task: SonarQubePublish@8
-
       displayName: '6. Publish SonarQube Quality Gate'
-
       inputs:
         pollingTimeoutSec: '600'
 
@@ -352,7 +324,6 @@ stages:
     # ==========================================================
     # 7. QUALITY GATE
     # ==========================================================
-
     - powershell: |
 
         Write-Host "=============================================="
@@ -365,21 +336,14 @@ stages:
 
 
     # ==========================================================
-    # 8. TERRAFORM VALIDATE
+    # 8. TERRAFORM INIT + VALIDATE
     # ==========================================================
-
     - task: AzureCLI@3
-
       displayName: '8. Terraform Init and Validate'
-
       inputs:
-
         azureSubscription: 'Qwerty-Service-Connection'
-
         scriptType: 'ps'
-
         scriptLocation: 'inlineScript'
-
         inlineScript: |
 
           $ErrorActionPreference = "Stop"
@@ -389,6 +353,10 @@ stages:
           Write-Host "=============================================="
 
           terraform version
+
+          if (-not (Test-Path "$(TERRAFORM_DIR)")) {
+              throw "Terraform directory not found."
+          }
 
           Set-Location "$(TERRAFORM_DIR)"
 
@@ -401,28 +369,21 @@ stages:
           terraform validate
 
           if ($LASTEXITCODE -ne 0) {
-              throw "Terraform validation failed."
+              throw "Terraform validate failed."
           }
 
-          Write-Host "Terraform validation completed."
+          Write-Host "Terraform validation successful."
 
 
     # ==========================================================
     # 9. TERRAFORM PLAN + APPLY
     # ==========================================================
-
     - task: AzureCLI@3
-
       displayName: '9. Terraform Plan and Apply'
-
       inputs:
-
         azureSubscription: 'Qwerty-Service-Connection'
-
         scriptType: 'ps'
-
         scriptLocation: 'inlineScript'
-
         inlineScript: |
 
           $ErrorActionPreference = "Stop"
@@ -432,16 +393,9 @@ stages:
           Write-Host "=============================================="
 
           az account show
-
           terraform version
 
           Set-Location "$(TERRAFORM_DIR)"
-
-          terraform init
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "Terraform init failed."
-          }
 
           terraform plan -out=tfplan
 
@@ -455,20 +409,23 @@ stages:
               throw "Terraform apply failed."
           }
 
-          Write-Host "Terraform infrastructure completed."
+          Write-Host "Terraform infrastructure completed successfully."
+
+
+    # ==========================================================
+    # 10. ELECTRON
+    # ==========================================================
 
 
     # ==========================================================
     # 10A. APPLICATION JRE
     #
     # IMPORTANT:
+    # We call fetch-jre.ps1 but DO NOT trust its LASTEXITCODE.
     #
-    # Do NOT check $LASTEXITCODE after fetch-jre.ps1.
-    #
-    # The script already successfully installed the JRE.
-    # We verify the actual output directory instead.
+    # The log already proved that the JRE was successfully
+    # downloaded and extracted.
     # ==========================================================
-
     - powershell: |
 
         $ErrorActionPreference = "Stop"
@@ -477,24 +434,50 @@ stages:
         Write-Host " 10. APPLICATION JRE"
         Write-Host "=============================================="
 
-        $jrePath = "$(Build.SourcesDirectory)\electron\resources\jre"
+        $jreCache = "$(JRE_CACHE_DIR)"
+        $jreTarget = "$(ELECTRON_DIR)\resources\jre"
 
-        if (Test-Path "$jrePath\bin\java.exe") {
+        New-Item `
+          -ItemType Directory `
+          -Force `
+          -Path "$(APP_CACHE_DIR)" | Out-Null
 
-            Write-Host "Application JRE already exists."
-            Write-Host "Skipping JRE download."
+        New-Item `
+          -ItemType Directory `
+          -Force `
+          -Path "$(ELECTRON_DIR)\resources" | Out-Null
+
+
+        # ------------------------------------------------------
+        # If persistent cache exists, copy it.
+        # ------------------------------------------------------
+
+        if (Test-Path "$jreCache\bin\java.exe") {
+
+            Write-Host "Cached JRE found."
+            Write-Host "Copying cached JRE..."
+
+            if (Test-Path $jreTarget) {
+                Remove-Item `
+                  -Path $jreTarget `
+                  -Recurse `
+                  -Force
+            }
+
+            Copy-Item `
+              -Path $jreCache `
+              -Destination $jreTarget `
+              -Recurse `
+              -Force
 
         }
         else {
 
-            Write-Host "Application JRE not found."
+            Write-Host "Cached JRE not found."
             Write-Host "Downloading Temurin JRE 17..."
 
             $env:JAVA_HOME = "$(JAVA17_HOME)"
-
-            $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
-
-            java -version
+            $env:PATH = "$env:JAVA_HOME\bin;$(MAVEN_HOME)\bin;$env:PATH"
 
             $fetchJre = "$(Build.SourcesDirectory)\build\fetch-jre.ps1"
 
@@ -502,113 +485,199 @@ stages:
                 throw "fetch-jre.ps1 not found."
             }
 
-            # Run the project script.
-            #
-            # IMPORTANT:
-            # Do NOT use $LASTEXITCODE here.
+            # Do NOT check LASTEXITCODE here.
+            # The script already demonstrated successful extraction.
             & $fetchJre
 
-            # Verify the real result instead.
+            # --------------------------------------------------
+            # IMPORTANT:
+            # Validate the actual installation.
+            # --------------------------------------------------
 
-            if (-not (Test-Path "$jrePath\bin\java.exe")) {
+            if (-not (Test-Path "$jreTarget\bin\java.exe")) {
 
-                Write-Host "JRE installation output:"
-                
-                if (Test-Path $jrePath) {
-                    Get-ChildItem $jrePath -Recurse |
-                        Select-Object FullName
-                }
-
-                throw "JRE was not installed correctly."
-
+                throw @"
+JRE installation failed.
+Expected Java executable:
+$jreTarget\bin\java.exe
+"@
             }
 
-            Write-Host "JRE installation completed successfully."
+            Write-Host "JRE was successfully installed."
+
+            # Save a persistent copy for future builds.
+            Write-Host "Saving JRE to persistent agent cache..."
+
+            if (Test-Path $jreCache) {
+                Remove-Item `
+                  -Path $jreCache `
+                  -Recurse `
+                  -Force
+            }
+
+            Copy-Item `
+              -Path $jreTarget `
+              -Destination $jreCache `
+              -Recurse `
+              -Force
+        }
+
+        if (-not (Test-Path "$jreTarget\bin\java.exe")) {
+            throw "JRE is missing: $jreTarget"
         }
 
         Write-Host ""
-        Write-Host "JRE is ready:"
-        Write-Host $jrePath
+        Write-Host "JRE READY."
+        Write-Host "Location: $jreTarget"
+
 
       displayName: '10A. Prepare Application JRE'
 
 
     # ==========================================================
-    # 10B. PLAYWRIGHT
+    # 10B. PLAYWRIGHT CHROMIUM
     #
-    # Again, don't rely on LASTEXITCODE from the PS1 script.
-    # Verify the actual browser directory.
+    # IMPORTANT:
+    # DO NOT CALL install-playwright.ps1
+    #
+    # We directly use the official Maven Playwright CLI command.
     # ==========================================================
-
     - powershell: |
 
         $ErrorActionPreference = "Stop"
 
         Write-Host "=============================================="
-        Write-Host " 10. PLAYWRIGHT CHROMIUM"
+        Write-Host " 10B. PLAYWRIGHT CHROMIUM"
         Write-Host "=============================================="
 
-        $playwrightPath = "$(Build.SourcesDirectory)\electron\resources\playwright"
+        $playwrightCache = "$(PLAYWRIGHT_CACHE_DIR)"
+        $playwrightTarget = "$(ELECTRON_DIR)\resources\playwright"
 
-        if (Test-Path $playwrightPath) {
+        New-Item `
+          -ItemType Directory `
+          -Force `
+          -Path "$(APP_CACHE_DIR)" | Out-Null
 
-            Write-Host "Playwright resources already exist."
-            Write-Host "Skipping Chromium download."
+        New-Item `
+          -ItemType Directory `
+          -Force `
+          -Path "$(ELECTRON_DIR)\resources" | Out-Null
 
+
+        # ------------------------------------------------------
+        # Use persistent cache if it exists.
+        # ------------------------------------------------------
+
+        if (Test-Path $playwrightCache) {
+
+            Write-Host "Cached Playwright resources found."
+            Write-Host "Using cached Chromium."
+
+            if (Test-Path $playwrightTarget) {
+                Remove-Item `
+                  -Path $playwrightTarget `
+                  -Recurse `
+                  -Force
+            }
+
+            Copy-Item `
+              -Path $playwrightCache `
+              -Destination $playwrightTarget `
+              -Recurse `
+              -Force
         }
         else {
 
-            Write-Host "Playwright resources not found."
+            Write-Host "Playwright cache not found."
             Write-Host "Installing Chromium..."
 
+            # --------------------------------------------------
+            # Force Java 17.
+            # --------------------------------------------------
+
             $env:JAVA_HOME = "$(JAVA17_HOME)"
-
-            $env:MAVEN_OPTS = "-Dmaven.repo.local=$(MAVEN_CACHE)"
-
             $env:PATH = "$env:JAVA_HOME\bin;$(MAVEN_HOME)\bin;$env:PATH"
 
+            Write-Host "JAVA_HOME:"
+            Write-Host $env:JAVA_HOME
+
+            Write-Host "Maven:"
+            Write-Host "$(MAVEN_HOME)"
+
             if (-not (Test-Path "$env:JAVA_HOME\bin\java.exe")) {
-                throw "Java 17 was not found."
+                throw "Java 17 not found."
             }
 
             if (-not (Test-Path "$(MAVEN_HOME)\bin\mvn.cmd")) {
-                throw "Maven was not found."
+                throw "Maven not found."
             }
 
             java -version
             mvn -version
 
-            $installPlaywright = "$(Build.SourcesDirectory)\build\install-playwright.ps1"
+            # --------------------------------------------------
+            # Tell Playwright where to install Chromium.
+            # --------------------------------------------------
 
-            if (-not (Test-Path $installPlaywright)) {
-                throw "install-playwright.ps1 not found."
+            $env:PLAYWRIGHT_BROWSERS_PATH = $playwrightTarget
+
+            Write-Host ""
+            Write-Host "PLAYWRIGHT_BROWSERS_PATH:"
+            Write-Host $env:PLAYWRIGHT_BROWSERS_PATH
+
+            # --------------------------------------------------
+            # Official Playwright Java CLI command.
+            # --------------------------------------------------
+
+            Write-Host ""
+            Write-Host "Installing Playwright Chromium..."
+
+            mvn -B -e exec:java `
+              -Dexec.mainClass=com.microsoft.playwright.CLI `
+              -Dexec.args="install chromium"
+
+            if ($LASTEXITCODE -ne 0) {
+                throw "Playwright Chromium installation failed."
             }
 
-            # Make Playwright browser location explicit.
+            # --------------------------------------------------
+            # Verify actual browser files.
+            # --------------------------------------------------
 
-            $env:PLAYWRIGHT_BROWSERS_PATH = $playwrightPath
-
-            & $installPlaywright
-
-            # DO NOT check LASTEXITCODE here.
-            #
-            # Verify the actual browser output instead.
-
-            if (-not (Test-Path $playwrightPath)) {
-
-                Write-Host "Playwright directory was not created."
-
-                throw "Playwright installation failed."
-
+            if (-not (Test-Path $playwrightTarget)) {
+                throw "Playwright directory was not created."
             }
 
-            Write-Host "Playwright installation completed."
+            Write-Host "Playwright Chromium installation successful."
 
+            # --------------------------------------------------
+            # Save persistent cache.
+            # --------------------------------------------------
+
+            Write-Host "Saving Playwright to persistent agent cache..."
+
+            if (Test-Path $playwrightCache) {
+                Remove-Item `
+                  -Path $playwrightCache `
+                  -Recurse `
+                  -Force
+            }
+
+            Copy-Item `
+              -Path $playwrightTarget `
+              -Destination $playwrightCache `
+              -Recurse `
+              -Force
+        }
+
+        if (-not (Test-Path $playwrightTarget)) {
+            throw "Playwright resources are missing."
         }
 
         Write-Host ""
-        Write-Host "Playwright resources are ready:"
-        Write-Host $playwrightPath
+        Write-Host "PLAYWRIGHT READY."
+        Write-Host "Location: $playwrightTarget"
+
 
       displayName: '10B. Prepare Playwright Chromium'
 
@@ -616,19 +685,19 @@ stages:
     # ==========================================================
     # 10C. ELECTRON PACKAGE
     # ==========================================================
-
     - powershell: |
 
         $ErrorActionPreference = "Stop"
 
         Write-Host "=============================================="
-        Write-Host " 10. ELECTRON PACKAGE"
+        Write-Host " 10C. ELECTRON PACKAGE"
         Write-Host "=============================================="
 
+        # ------------------------------------------------------
+        # Java/Maven environment
+        # ------------------------------------------------------
+
         $env:JAVA_HOME = "$(JAVA17_HOME)"
-
-        $env:MAVEN_OPTS = "-Dmaven.repo.local=$(MAVEN_CACHE)"
-
         $env:PATH = "$env:JAVA_HOME\bin;$(MAVEN_HOME)\bin;$env:PATH"
 
         Set-Location "$(ELECTRON_DIR)"
@@ -636,65 +705,61 @@ stages:
         node -v
         npm -v
 
-        Write-Host ""
-        Write-Host "Checking backend..."
+        # ------------------------------------------------------
+        # Verify backend
+        # ------------------------------------------------------
 
         if (-not (Test-Path "$(Build.SourcesDirectory)\backend\target\classes")) {
             throw "Backend build output is missing."
         }
 
-        Write-Host "Backend OK."
-
-
-        Write-Host ""
-        Write-Host "Checking frontend..."
+        # ------------------------------------------------------
+        # Verify frontend
+        # ------------------------------------------------------
 
         if (-not (Test-Path "$(ELECTRON_DIR)\renderer\index.html")) {
             throw "Frontend renderer is missing."
         }
 
-        Write-Host "Frontend OK."
-
-
-        Write-Host ""
-        Write-Host "Checking JRE..."
+        # ------------------------------------------------------
+        # Verify JRE
+        # ------------------------------------------------------
 
         if (-not (Test-Path "$(ELECTRON_DIR)\resources\jre\bin\java.exe")) {
             throw "Application JRE is missing."
         }
 
-        Write-Host "JRE OK."
-
-
-        Write-Host ""
-        Write-Host "Checking Playwright..."
+        # ------------------------------------------------------
+        # Verify Playwright
+        # ------------------------------------------------------
 
         if (-not (Test-Path "$(ELECTRON_DIR)\resources\playwright")) {
             throw "Playwright resources are missing."
         }
 
-        Write-Host "Playwright OK."
+        Write-Host "All Electron resources are available."
 
+        # ------------------------------------------------------
+        # Electron dependencies
+        # ------------------------------------------------------
 
-        # ======================================================
-        # ELECTRON NPM INSTALL
-        # ======================================================
-
-        Write-Host ""
         Write-Host "Installing Electron dependencies..."
 
-        npm ci --cache "$(NPM_CACHE)"
+        New-Item `
+          -ItemType Directory `
+          -Force `
+          -Path "$(NPM_CACHE_DIR)" | Out-Null
+
+        npm ci --cache "$(NPM_CACHE_DIR)"
 
         if ($LASTEXITCODE -ne 0) {
             throw "Electron npm ci failed."
         }
 
+        # ------------------------------------------------------
+        # Electron build
+        # ------------------------------------------------------
 
-        # ======================================================
-        # ELECTRON BUILD
-        # ======================================================
-
-        Write-Host ""
         Write-Host "Running Electron Builder..."
 
         npm run dist
@@ -703,32 +768,15 @@ stages:
             throw "Electron packaging failed."
         }
 
-
-        # ======================================================
-        # VERIFY DIST
-        # ======================================================
+        # ------------------------------------------------------
+        # Verify dist
+        # ------------------------------------------------------
 
         $distDir = "$(Build.SourcesDirectory)\dist"
 
         if (-not (Test-Path $distDir)) {
-
-            Write-Host ""
-            Write-Host "Searching for generated EXE..."
-
-            Get-ChildItem `
-              "$(Build.SourcesDirectory)" `
-              -Filter "*.exe" `
-              -Recurse `
-              -ErrorAction SilentlyContinue |
-              Select-Object FullName, Length
-
             throw "Electron dist directory was not created."
-
         }
-
-
-        Write-Host ""
-        Write-Host "Generated EXE files:"
 
         Get-ChildItem `
           $distDir `
@@ -736,14 +784,11 @@ stages:
           -Recurse |
           Select-Object FullName, Length
 
-
         if (-not (Test-Path "$(ELECTRON_EXE)")) {
-            throw "Expected installer was not created: $(ELECTRON_EXE)"
+            throw "Expected EXE was not created: $(ELECTRON_EXE)"
         }
 
-
         $fileInfo = Get-Item "$(ELECTRON_EXE)"
-
 
         Write-Host ""
         Write-Host "=============================================="
@@ -753,43 +798,32 @@ stages:
         Write-Host "EXE:"
         Write-Host $fileInfo.FullName
 
-        Write-Host "Size:"
+        Write-Host "SIZE:"
         Write-Host "$($fileInfo.Length) bytes"
+
 
       displayName: '10C. Package Electron'
 
 
     # ==========================================================
-    # 11. PUBLISH EXE
+    # 11. PUBLISH EXE TO AZURE DEVOPS
     # ==========================================================
-
     - task: PublishPipelineArtifact@1
-
       displayName: '11. Publish NaukriAutomator EXE'
-
       inputs:
-
         targetPath: '$(ELECTRON_EXE)'
-
         artifact: 'NaukriAutomator-EXE'
 
 
     # ==========================================================
-    # 11B. AZURE BLOB UPLOAD
+    # 11B. UPLOAD TO AZURE BLOB
     # ==========================================================
-
     - task: AzureCLI@3
-
       displayName: '11. Upload EXE to Azure Blob'
-
       inputs:
-
         azureSubscription: 'Qwerty-Service-Connection'
-
         scriptType: 'ps'
-
         scriptLocation: 'inlineScript'
-
         inlineScript: |
 
           $ErrorActionPreference = "Stop"
@@ -799,17 +833,13 @@ stages:
           Write-Host "=============================================="
 
           $source = "$(ELECTRON_EXE)"
-
           $blobName = "NaukriAutomator-$(Build.BuildId).exe"
-
 
           if (-not (Test-Path $source)) {
               throw "EXE not found: $source"
           }
 
-
           $fileInfo = Get-Item $source
-
 
           Write-Host "Storage Account : $(AZURE_STORAGE_ACCOUNT)"
           Write-Host "Container       : $(AZURE_STORAGE_CONTAINER)"
@@ -817,10 +847,8 @@ stages:
           Write-Host "Blob            : $blobName"
           Write-Host "File Size       : $($fileInfo.Length) bytes"
 
-
           Write-Host ""
           Write-Host "Uploading EXE..."
-
 
           az storage blob upload `
             --account-name "$(AZURE_STORAGE_ACCOUNT)" `
@@ -831,11 +859,9 @@ stages:
             --overwrite `
             --only-show-errors
 
-
           if ($LASTEXITCODE -ne 0) {
               throw "Azure Blob upload failed."
           }
-
 
           Write-Host ""
           Write-Host "Azure Blob upload completed successfully."
@@ -844,19 +870,12 @@ stages:
     # ==========================================================
     # 12. DEPLOYMENT VERIFICATION
     # ==========================================================
-
     - task: AzureCLI@3
-
       displayName: '12. Verify Azure Blob Deployment'
-
       inputs:
-
         azureSubscription: 'Qwerty-Service-Connection'
-
         scriptType: 'ps'
-
         scriptLocation: 'inlineScript'
-
         inlineScript: |
 
           $ErrorActionPreference = "Stop"
@@ -867,11 +886,6 @@ stages:
 
           $blobName = "NaukriAutomator-$(Build.BuildId).exe"
 
-
-          Write-Host "Checking blob:"
-          Write-Host $blobName
-
-
           az storage blob show `
             --account-name "$(AZURE_STORAGE_ACCOUNT)" `
             --container-name "$(AZURE_STORAGE_CONTAINER)" `
@@ -879,11 +893,9 @@ stages:
             --auth-mode login `
             --output table
 
-
           if ($LASTEXITCODE -ne 0) {
               throw "Deployment verification failed."
           }
-
 
           Write-Host ""
           Write-Host "=============================================="
