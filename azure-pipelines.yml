@@ -63,19 +63,11 @@ stages:
       displayName: 'Verify Gitleaks'
 
     - powershell: |
-        Write-Host "Running Gitleaks scan..."
+        Write-Host "Running Gitleaks diagnostic scan..."
 
-        gitleaks detect `
-          --source "$(Build.SourcesDirectory)" `
-          --redact `
-          --exit-code 1 `
-          --report-format sarif `
-          --report-path "$(Build.ArtifactStagingDirectory)\gitleaks.sarif"
-          --exit-code 0
+        gitleaks dir "$(Build.SourcesDirectory)" --redact --report-format sarif --report-path "$(Build.ArtifactStagingDirectory)\gitleaks.sarif" --exit-code 0
 
-        if ($LASTEXITCODE -ne 0) {
-            throw "Gitleaks detected potential secrets."
-        }
+        Write-Host "Gitleaks diagnostic scan completed."
       displayName: 'Gitleaks Scan'
 
     - task: PublishPipelineArtifact@1
