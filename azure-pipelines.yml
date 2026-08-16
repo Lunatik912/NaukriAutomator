@@ -3,903 +3,221 @@ trigger:
     include:
       - master
 
-pr: none
-
 pool:
   name: B13-Pool
 
 variables:
-
-  # ============================================================
-  # JAVA
-  # ============================================================
-  JAVA17_HOME: 'C:\Program Files\Java\jdk-17'
-  JAVA21_HOME: 'C:\Program Files\Java\jdk-21.0.12'
-
-  JAVA_HOME_17_X64: 'C:\Program Files\Java\jdk-17'
-  JAVA_HOME_21_X64: 'C:\Program Files\Java\jdk-21.0.12'
-
-  # ============================================================
-  # MAVEN
-  # ============================================================
-  MAVEN_HOME: 'C:\Program Files\Java\apache-maven-3.10.0-rc-1'
-
-  # ============================================================
-  # SONARQUBE
-  # ============================================================
-  SONAR_PROJECT_KEY: 'NA_Jenkins_Demo'
-  SONAR_PROJECT_NAME: 'NA_Jenkins_Demo'
-
-  # ============================================================
-  # AZURE STORAGE
-  # ============================================================
-  AZURE_STORAGE_ACCOUNT: 'naterraformstorage01'
-  AZURE_STORAGE_CONTAINER: 'nacontainer'
-
-  # ============================================================
-  # TERRAFORM
-  # ============================================================
-  TERRAFORM_DIR: '$(Build.SourcesDirectory)\Terraform'
-
-  # ============================================================
-  # ELECTRON
-  # ============================================================
-  ELECTRON_DIR: '$(Build.SourcesDirectory)\electron'
-  ELECTRON_EXE: '$(Build.SourcesDirectory)\dist\NaukriAutomator 0.1.0.exe'
-
-  # ============================================================
-  # PERSISTENT AGENT CACHE
-  #
-  # IMPORTANT:
-  # These are OUTSIDE Build.SourcesDirectory.
-  # Therefore checkout clean does not remove them.
-  # ============================================================
-  APP_CACHE_DIR: '$(Agent.ToolsDirectory)\NaukriAutomatorCache'
-  JRE_CACHE_DIR: '$(Agent.ToolsDirectory)\NaukriAutomatorCache\jre'
-  PLAYWRIGHT_CACHE_DIR: '$(Agent.ToolsDirectory)\NaukriAutomatorCache\playwright'
-  NPM_CACHE_DIR: '$(Agent.ToolsDirectory)\NaukriAutomatorCache\npm'
-
-
-# ==============================================================
-# ONE CONTINUOUS JOB
-#
-# Checkout
-#   ↓
-# Gitleaks
-#   ↓
-# Backend Test
-#   ↓
-# Backend Build
-#   ↓
-# Frontend Build
-#   ↓
-# SonarQube
-#   ↓
-# Quality Gate
-#   ↓
-# Terraform
-#   ↓
-# JRE
-#   ↓
-# Playwright
-#   ↓
-# Electron
-#   ↓
-# Azure Blob
-#   ↓
-# Verify
-#
-# NO:
-# - repeated checkout
-# - pipeline artifact download
-# - pipeline artifact upload between stages
-# - repeated workspace creation
-# ==============================================================
+  FRONTEND_DIR: 'frontend'
+  BACKEND_DIR: 'backend'
+  ELECTRON_DIR: 'electron'
+  MAVEN_CACHE_FOLDER: '$(Pipeline.Workspace)/.m2/repository'
+  MAVEN_OPTS: '-Dmaven.repo.local=$(MAVEN_CACHE_FOLDER)'
 
 stages:
-
-- stage: NaukriAutomatorPipeline
-  displayName: 'NaukriAutomator Complete CI/CD'
-
-  jobs:
-
-  - job: CompletePipeline
-    displayName: 'Complete NaukriAutomator CI/CD'
-
-    timeoutInMinutes: 180
-
-    steps:
-
-
-    # ==========================================================
-    # 1. CHECKOUT
-    # ==========================================================
-    - checkout: self
-      clean: true
-      displayName: '1. Checkout GitHub Repository'
-
-
-    # ==========================================================
-    # 2. GITLEAKS
-    # ==========================================================
-    - powershell: |
-
-        $ErrorActionPreference = "Stop"
-
-        Write-Host "=============================================="
-        Write-Host " 2. GITLEAKS SECURITY SCAN"
-        Write-Host "=============================================="
-
-        gitleaks version
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Gitleaks is not available."
-        }
-
-        $report = "$(Build.ArtifactStagingDirectory)\gitleaks.sarif"
-
-        gitleaks dir "$(Build.SourcesDirectory)" `
-          --redact `
-          --report-format sarif `
-          --report-path "$report" `
-          --exit-code 0
-
-        if (-not (Test-Path $report)) {
-            throw "Gitleaks report was not generated."
-        }
-
-        Write-Host "Gitleaks scan completed successfully."
-
-      displayName: '2. Security Scan - Gitleaks'
-
-
-    - task: PublishPipelineArtifact@1
-      displayName: 'Publish Gitleaks Report'
-      inputs:
-        targetPath: '$(Build.ArtifactStagingDirectory)\gitleaks.sarif'
-        artifact: 'gitleaks-report'
-
-
-    # ==========================================================
-    # 3. BACKEND TEST
-    # ==========================================================
-    - powershell: |
-
-        $ErrorActionPreference = "Stop"
-
-        Write-Host "=============================================="
-        Write-Host " 3. BACKEND TEST"
-        Write-Host "=============================================="
-
-        $env:JAVA_HOME = "$(JAVA17_HOME)"
-        $env:PATH = "$env:JAVA_HOME\bin;$(MAVEN_HOME)\bin;$env:PATH"
-
-        if (-not (Test-Path "$env:JAVA_HOME\bin\java.exe")) {
-            throw "Java 17 not found."
-        }
-
-        if (-not (Test-Path "$(MAVEN_HOME)\bin\mvn.cmd")) {
-            throw "Maven not found."
-        }
-
-        java -version
-        mvn -version
-
-        mvn test
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Backend tests failed."
-        }
-
-        Write-Host "Backend tests completed successfully."
-
-      workingDirectory: '$(Build.SourcesDirectory)\backend'
-      displayName: '3. Test Backend'
-
-
-    # ==========================================================
-    # 4. BUILD BACKEND
-    # ==========================================================
-    - powershell: |
-
-        $ErrorActionPreference = "Stop"
-
-        Write-Host "=============================================="
-        Write-Host " 4. BUILD BACKEND"
-        Write-Host "=============================================="
-
-        $env:JAVA_HOME = "$(JAVA17_HOME)"
-        $env:PATH = "$env:JAVA_HOME\bin;$(MAVEN_HOME)\bin;$env:PATH"
-
-        java -version
-        mvn -version
-
-        Write-Host "Building Spring Boot application..."
-
-        mvn clean package -DskipTests
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Backend Maven package failed."
-        }
-
-        Write-Host "Copying Maven dependencies..."
-
-        mvn dependency:copy-dependencies `
-          -DoutputDirectory=target/dependency
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Maven dependency copy failed."
-        }
-
-        if (-not (Test-Path "$(Build.SourcesDirectory)\backend\target\classes")) {
-            throw "backend\target\classes was not created."
-        }
-
-        if (-not (Test-Path "$(Build.SourcesDirectory)\backend\target\dependency")) {
-            throw "backend\target\dependency was not created."
-        }
-
-        Write-Host "Backend build completed successfully."
-
-      workingDirectory: '$(Build.SourcesDirectory)\backend'
-      displayName: '4. Build Backend'
-
-
-    # ==========================================================
-    # 5. BUILD FRONTEND
-    # ==========================================================
-    - powershell: |
-
-        $ErrorActionPreference = "Stop"
-
-        Write-Host "=============================================="
-        Write-Host " 5. BUILD FRONTEND"
-        Write-Host "=============================================="
-
-        node -v
-        npm -v
-
-        New-Item `
-          -ItemType Directory `
-          -Force `
-          -Path "$(NPM_CACHE_DIR)" | Out-Null
-
-        Write-Host "Installing frontend dependencies..."
-
-        npm ci --cache "$(NPM_CACHE_DIR)"
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Frontend npm ci failed."
-        }
-
-        Write-Host "Building frontend..."
-
-        npm run build
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Frontend build failed."
-        }
-
-        if (-not (Test-Path "$(ELECTRON_DIR)\renderer\index.html")) {
-            throw "Frontend renderer was not generated."
-        }
-
-        Write-Host "Frontend build completed successfully."
-
-      workingDirectory: '$(Build.SourcesDirectory)\frontend'
-      displayName: '5. Build Frontend'
-
-
-    # ==========================================================
-    # 6. SONARQUBE
-    # ==========================================================
-    - task: SonarQubePrepare@8
-      displayName: '6. Prepare SonarQube Analysis'
-      inputs:
-        SonarQube: 'NaukriAutomator-SC'
-        scannerMode: 'cli'
-        configMode: 'manual'
-        cliProjectKey: '$(SONAR_PROJECT_KEY)'
-        cliProjectName: '$(SONAR_PROJECT_NAME)'
-        cliSources: '.'
-        extraProperties: |
-          sonar.sources=backend/src,frontend/src
-          sonar.java.binaries=backend/target/classes
-          sonar.java.libraries=backend/target/dependency/*.jar
-          sonar.qualitygate.wait=true
-
-
-    - task: SonarQubeAnalyze@8
-      displayName: '6. Run SonarQube Scanner'
-      inputs:
-        jdkversion: 'JAVA_HOME_21_X64'
-
-
-    - task: SonarQubePublish@8
-      displayName: '6. Publish SonarQube Quality Gate'
-      inputs:
-        pollingTimeoutSec: '600'
-
-
-    # ==========================================================
-    # 7. QUALITY GATE
-    # ==========================================================
-    - powershell: |
-
-        Write-Host "=============================================="
-        Write-Host " 7. QUALITY GATE"
-        Write-Host "=============================================="
-
-        Write-Host "SonarQube Quality Gate passed."
-
-      displayName: '7. Quality Gate Passed'
-
-
-    # ==========================================================
-    # 8. TERRAFORM INIT + VALIDATE
-    # ==========================================================
-    - task: AzureCLI@3
-      displayName: '8. Terraform Init and Validate'
-      inputs:
-        azureSubscription: 'Qwerty-Service-Connection'
-        scriptType: 'ps'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "=============================================="
-          Write-Host " 8. TERRAFORM VALIDATE"
-          Write-Host "=============================================="
-
-          terraform version
-
-          if (-not (Test-Path "$(TERRAFORM_DIR)")) {
-              throw "Terraform directory not found."
-          }
-
-          Set-Location "$(TERRAFORM_DIR)"
-
-          terraform init
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "Terraform init failed."
-          }
-
-          terraform validate
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "Terraform validate failed."
-          }
-
-          Write-Host "Terraform validation successful."
-
-
-    # ==========================================================
-    # 9. TERRAFORM PLAN + APPLY
-    # ==========================================================
-    - task: AzureCLI@3
-      displayName: '9. Terraform Plan and Apply'
-      inputs:
-        azureSubscription: 'Qwerty-Service-Connection'
-        scriptType: 'ps'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "=============================================="
-          Write-Host " 9. TERRAFORM INFRASTRUCTURE"
-          Write-Host "=============================================="
-
-          az account show
-          terraform version
-
-          Set-Location "$(TERRAFORM_DIR)"
-
-          terraform plan -out=tfplan
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "Terraform plan failed."
-          }
-
-          terraform apply -auto-approve tfplan
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "Terraform apply failed."
-          }
-
-          Write-Host "Terraform infrastructure completed successfully."
-
-
-    # ==========================================================
-    # 10. ELECTRON
-    # ==========================================================
-
-
-    # ==========================================================
-    # 10A. APPLICATION JRE
-    #
-    # IMPORTANT:
-    # We call fetch-jre.ps1 but DO NOT trust its LASTEXITCODE.
-    #
-    # The log already proved that the JRE was successfully
-    # downloaded and extracted.
-    # ==========================================================
-    - powershell: |
-
-        $ErrorActionPreference = "Stop"
-
-        Write-Host "=============================================="
-        Write-Host " 10. APPLICATION JRE"
-        Write-Host "=============================================="
-
-        $jreCache = "$(JRE_CACHE_DIR)"
-        $jreTarget = "$(ELECTRON_DIR)\resources\jre"
-
-        New-Item `
-          -ItemType Directory `
-          -Force `
-          -Path "$(APP_CACHE_DIR)" | Out-Null
-
-        New-Item `
-          -ItemType Directory `
-          -Force `
-          -Path "$(ELECTRON_DIR)\resources" | Out-Null
-
-
-        # ------------------------------------------------------
-        # If persistent cache exists, copy it.
-        # ------------------------------------------------------
-
-        if (Test-Path "$jreCache\bin\java.exe") {
-
-            Write-Host "Cached JRE found."
-            Write-Host "Copying cached JRE..."
-
-            if (Test-Path $jreTarget) {
-                Remove-Item `
-                  -Path $jreTarget `
-                  -Recurse `
-                  -Force
-            }
-
-            Copy-Item `
-              -Path $jreCache `
-              -Destination $jreTarget `
-              -Recurse `
-              -Force
-
-        }
-        else {
-
-            Write-Host "Cached JRE not found."
-            Write-Host "Downloading Temurin JRE 17..."
-
-            $env:JAVA_HOME = "$(JAVA17_HOME)"
-            $env:PATH = "$env:JAVA_HOME\bin;$(MAVEN_HOME)\bin;$env:PATH"
-
-            $fetchJre = "$(Build.SourcesDirectory)\build\fetch-jre.ps1"
-
-            if (-not (Test-Path $fetchJre)) {
-                throw "fetch-jre.ps1 not found."
-            }
-
-            # Do NOT check LASTEXITCODE here.
-            # The script already demonstrated successful extraction.
-            & $fetchJre
-
-            # --------------------------------------------------
-            # IMPORTANT:
-            # Validate the actual installation.
-            # --------------------------------------------------
-
-            if (-not (Test-Path "$jreTarget\bin\java.exe")) {
-
-                throw @"
-JRE installation failed.
-Expected Java executable:
-$jreTarget\bin\java.exe
-"@
-            }
-
-            Write-Host "JRE was successfully installed."
-
-            # Save a persistent copy for future builds.
-            Write-Host "Saving JRE to persistent agent cache..."
-
-            if (Test-Path $jreCache) {
-                Remove-Item `
-                  -Path $jreCache `
-                  -Recurse `
-                  -Force
-            }
-
-            Copy-Item `
-              -Path $jreTarget `
-              -Destination $jreCache `
-              -Recurse `
-              -Force
-        }
-
-        if (-not (Test-Path "$jreTarget\bin\java.exe")) {
-            throw "JRE is missing: $jreTarget"
-        }
-
-        Write-Host ""
-        Write-Host "JRE READY."
-        Write-Host "Location: $jreTarget"
-
-
-      displayName: '10A. Prepare Application JRE'
-
-
-    # ==========================================================
-    # 10B. PLAYWRIGHT CHROMIUM
-    #
-    # IMPORTANT:
-    # DO NOT CALL install-playwright.ps1
-    #
-    # We directly use the official Maven Playwright CLI command.
-    # ==========================================================
-    - powershell: |
-
-        $ErrorActionPreference = "Stop"
-
-        Write-Host "=============================================="
-        Write-Host " 10B. PLAYWRIGHT CHROMIUM"
-        Write-Host "=============================================="
-
-        $playwrightCache = "$(PLAYWRIGHT_CACHE_DIR)"
-        $playwrightTarget = "$(ELECTRON_DIR)\resources\playwright"
-
-        New-Item `
-          -ItemType Directory `
-          -Force `
-          -Path "$(APP_CACHE_DIR)" | Out-Null
-
-        New-Item `
-          -ItemType Directory `
-          -Force `
-          -Path "$(ELECTRON_DIR)\resources" | Out-Null
-
-
-        # ------------------------------------------------------
-        # Use persistent cache if it exists.
-        # ------------------------------------------------------
-
-        if (Test-Path $playwrightCache) {
-
-            Write-Host "Cached Playwright resources found."
-            Write-Host "Using cached Chromium."
-
-            if (Test-Path $playwrightTarget) {
-                Remove-Item `
-                  -Path $playwrightTarget `
-                  -Recurse `
-                  -Force
-            }
-
-            Copy-Item `
-              -Path $playwrightCache `
-              -Destination $playwrightTarget `
-              -Recurse `
-              -Force
-        }
-        else {
-
-            Write-Host "Playwright cache not found."
-            Write-Host "Installing Chromium..."
-
-            # --------------------------------------------------
-            # Force Java 17.
-            # --------------------------------------------------
-
-            $env:JAVA_HOME = "$(JAVA17_HOME)"
-            $env:PATH = "$env:JAVA_HOME\bin;$(MAVEN_HOME)\bin;$env:PATH"
-
-            Write-Host "JAVA_HOME:"
-            Write-Host $env:JAVA_HOME
-
-            Write-Host "Maven:"
-            Write-Host "$(MAVEN_HOME)"
-
-            if (-not (Test-Path "$env:JAVA_HOME\bin\java.exe")) {
-                throw "Java 17 not found."
-            }
-
-            if (-not (Test-Path "$(MAVEN_HOME)\bin\mvn.cmd")) {
-                throw "Maven not found."
-            }
-
-            java -version
-            mvn -version
-
-            # --------------------------------------------------
-            # Tell Playwright where to install Chromium.
-            # --------------------------------------------------
-
-            $env:PLAYWRIGHT_BROWSERS_PATH = $playwrightTarget
-
-            Write-Host ""
-            Write-Host "PLAYWRIGHT_BROWSERS_PATH:"
-            Write-Host $env:PLAYWRIGHT_BROWSERS_PATH
-
-            # --------------------------------------------------
-            # Official Playwright Java CLI command.
-            # --------------------------------------------------
-
-            Write-Host ""
-            Write-Host "Installing Playwright Chromium..."
-
-            mvn -B -e exec:java `
-              -Dexec.mainClass=com.microsoft.playwright.CLI `
-              -Dexec.args="install chromium"
-
-            if ($LASTEXITCODE -ne 0) {
-                throw "Playwright Chromium installation failed."
-            }
-
-            # --------------------------------------------------
-            # Verify actual browser files.
-            # --------------------------------------------------
-
-            if (-not (Test-Path $playwrightTarget)) {
-                throw "Playwright directory was not created."
-            }
-
-            Write-Host "Playwright Chromium installation successful."
-
-            # --------------------------------------------------
-            # Save persistent cache.
-            # --------------------------------------------------
-
-            Write-Host "Saving Playwright to persistent agent cache..."
-
-            if (Test-Path $playwrightCache) {
-                Remove-Item `
-                  -Path $playwrightCache `
-                  -Recurse `
-                  -Force
-            }
-
-            Copy-Item `
-              -Path $playwrightTarget `
-              -Destination $playwrightCache `
-              -Recurse `
-              -Force
-        }
-
-        if (-not (Test-Path $playwrightTarget)) {
-            throw "Playwright resources are missing."
-        }
-
-        Write-Host ""
-        Write-Host "PLAYWRIGHT READY."
-        Write-Host "Location: $playwrightTarget"
-
-
-      displayName: '10B. Prepare Playwright Chromium'
-
-
-    # ==========================================================
-    # 10C. ELECTRON PACKAGE
-    # ==========================================================
-    - powershell: |
-
-        $ErrorActionPreference = "Stop"
-
-        Write-Host "=============================================="
-        Write-Host " 10C. ELECTRON PACKAGE"
-        Write-Host "=============================================="
-
-        # ------------------------------------------------------
-        # Java/Maven environment
-        # ------------------------------------------------------
-
-        $env:JAVA_HOME = "$(JAVA17_HOME)"
-        $env:PATH = "$env:JAVA_HOME\bin;$(MAVEN_HOME)\bin;$env:PATH"
-
-        Set-Location "$(ELECTRON_DIR)"
-
-        node -v
-        npm -v
-
-        # ------------------------------------------------------
-        # Verify backend
-        # ------------------------------------------------------
-
-        if (-not (Test-Path "$(Build.SourcesDirectory)\backend\target\classes")) {
-            throw "Backend build output is missing."
-        }
-
-        # ------------------------------------------------------
-        # Verify frontend
-        # ------------------------------------------------------
-
-        if (-not (Test-Path "$(ELECTRON_DIR)\renderer\index.html")) {
-            throw "Frontend renderer is missing."
-        }
-
-        # ------------------------------------------------------
-        # Verify JRE
-        # ------------------------------------------------------
-
-        if (-not (Test-Path "$(ELECTRON_DIR)\resources\jre\bin\java.exe")) {
-            throw "Application JRE is missing."
-        }
-
-        # ------------------------------------------------------
-        # Verify Playwright
-        # ------------------------------------------------------
-
-        if (-not (Test-Path "$(ELECTRON_DIR)\resources\playwright")) {
-            throw "Playwright resources are missing."
-        }
-
-        Write-Host "All Electron resources are available."
-
-        # ------------------------------------------------------
-        # Electron dependencies
-        # ------------------------------------------------------
-
-        Write-Host "Installing Electron dependencies..."
-
-        New-Item `
-          -ItemType Directory `
-          -Force `
-          -Path "$(NPM_CACHE_DIR)" | Out-Null
-
-        npm ci --cache "$(NPM_CACHE_DIR)"
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Electron npm ci failed."
-        }
-
-        # ------------------------------------------------------
-        # Electron build
-        # ------------------------------------------------------
-
-        Write-Host "Running Electron Builder..."
-
-        npm run dist
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Electron packaging failed."
-        }
-
-        # ------------------------------------------------------
-        # Verify dist
-        # ------------------------------------------------------
-
-        $distDir = "$(Build.SourcesDirectory)\dist"
-
-        if (-not (Test-Path $distDir)) {
-            throw "Electron dist directory was not created."
-        }
-
-        Get-ChildItem `
-          $distDir `
-          -Filter "*.exe" `
-          -Recurse |
-          Select-Object FullName, Length
-
-        if (-not (Test-Path "$(ELECTRON_EXE)")) {
-            throw "Expected EXE was not created: $(ELECTRON_EXE)"
-        }
-
-        $fileInfo = Get-Item "$(ELECTRON_EXE)"
-
-        Write-Host ""
-        Write-Host "=============================================="
-        Write-Host " ELECTRON BUILD SUCCESSFUL"
-        Write-Host "=============================================="
-
-        Write-Host "EXE:"
-        Write-Host $fileInfo.FullName
-
-        Write-Host "SIZE:"
-        Write-Host "$($fileInfo.Length) bytes"
-
-
-      displayName: '10C. Package Electron'
-
-
-    # ==========================================================
-    # 11. PUBLISH EXE TO AZURE DEVOPS
-    # ==========================================================
-    - task: PublishPipelineArtifact@1
-      displayName: '11. Publish NaukriAutomator EXE'
-      inputs:
-        targetPath: '$(ELECTRON_EXE)'
-        artifact: 'NaukriAutomator-EXE'
-
-
-    # ==========================================================
-    # 11B. UPLOAD TO AZURE BLOB
-    # ==========================================================
-    - task: AzureCLI@3
-      displayName: '11. Upload EXE to Azure Blob'
-      inputs:
-        azureSubscription: 'Qwerty-Service-Connection'
-        scriptType: 'ps'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "=============================================="
-          Write-Host " 11. AZURE BLOB UPLOAD"
-          Write-Host "=============================================="
-
-          $source = "$(ELECTRON_EXE)"
-          $blobName = "NaukriAutomator-$(Build.BuildId).exe"
-
-          if (-not (Test-Path $source)) {
-              throw "EXE not found: $source"
-          }
-
-          $fileInfo = Get-Item $source
-
-          Write-Host "Storage Account : $(AZURE_STORAGE_ACCOUNT)"
-          Write-Host "Container       : $(AZURE_STORAGE_CONTAINER)"
-          Write-Host "Source          : $source"
-          Write-Host "Blob            : $blobName"
-          Write-Host "File Size       : $($fileInfo.Length) bytes"
-
-          Write-Host ""
-          Write-Host "Uploading EXE..."
-
-          az storage blob upload `
-            --account-name "$(AZURE_STORAGE_ACCOUNT)" `
-            --container-name "$(AZURE_STORAGE_CONTAINER)" `
-            --name "$blobName" `
-            --file "$source" `
-            --auth-mode login `
-            --overwrite `
-            --only-show-errors
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "Azure Blob upload failed."
-          }
-
-          Write-Host ""
-          Write-Host "Azure Blob upload completed successfully."
-
-
-    # ==========================================================
-    # 12. DEPLOYMENT VERIFICATION
-    # ==========================================================
-    - task: AzureCLI@3
-      displayName: '12. Verify Azure Blob Deployment'
-      inputs:
-        azureSubscription: 'Qwerty-Service-Connection'
-        scriptType: 'ps'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "=============================================="
-          Write-Host " 12. DEPLOYMENT VERIFICATION"
-          Write-Host "=============================================="
-
-          $blobName = "NaukriAutomator-$(Build.BuildId).exe"
-
-          az storage blob show `
-            --account-name "$(AZURE_STORAGE_ACCOUNT)" `
-            --container-name "$(AZURE_STORAGE_CONTAINER)" `
-            --name "$blobName" `
-            --auth-mode login `
-            --output table
-
-          if ($LASTEXITCODE -ne 0) {
-              throw "Deployment verification failed."
-          }
-
-          Write-Host ""
-          Write-Host "=============================================="
-          Write-Host " DEPLOYMENT VERIFICATION SUCCESSFUL"
-          Write-Host "=============================================="
-
-          Write-Host "Blob: $blobName"
+  # =======================================================
+  # 1. SECURITY SCAN & PREPARATION
+  # =======================================================
+  - stage: SecurityScan
+    displayName: 'Security Scan (Gitleaks)'
+    jobs:
+      - job: GitleaksScan
+        steps:
+          - task: Gitleaks@2
+            displayName: 'Gitleaks Detect'
+            inputs:
+              scanLocation: '$(Build.SourcesDirectory)'
+              configType: 'default'
+
+  # =======================================================
+  # 2. PARALLEL BUILD & TEST STAGE (Runs concurrently)
+  # =======================================================
+  - stage: BuildAndTest
+    displayName: 'Build & Test Applications'
+    dependsOn: SecurityScan
+    jobs:
+      # --- BACKEND JOB ---
+      - job: BuildBackend
+        displayName: 'Build & Test Java Backend'
+        steps:
+          - task: JavaToolInstaller@0
+            inputs:
+              versionSpec: '17'
+              jdkArchitectureOption: 'x64'
+              jdkSourceOption: 'PreInstalled'
+
+          # Cache Maven Dependencies for Faster Downloads
+          - task: Cache@2
+            displayName: 'Cache Maven packages'
+            inputs:
+              key: 'maven | "$(Agent.OS)" | $(BACKEND_DIR)/pom.xml'
+              restoreKeys: |
+                maven | "$(Agent.OS)"
+              path: $(MAVEN_CACHE_FOLDER)
+
+          - script: mvn test
+            workingDirectory: $(BACKEND_DIR)
+            displayName: 'Run Backend Tests'
+
+          - script: mvn clean package -DskipTests
+            workingDirectory: $(BACKEND_DIR)
+            displayName: 'Package Backend'
+
+          - script: mvn dependency:copy-dependencies -DoutputDirectory=target/dependency
+            workingDirectory: $(BACKEND_DIR)
+            displayName: 'Copy Dependencies'
+
+          # Publish Artifacts for SonarQube Scanner
+          - publish: $(BACKEND_DIR)/target
+            artifact: backend-target
+            displayName: 'Publish Backend Target Artifact'
+
+      # --- FRONTEND JOB ---
+      - job: BuildFrontend
+        displayName: 'Build React Frontend'
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '18.x'
+
+          # Cache NPM Dependencies
+          - task: Cache@2
+            displayName: 'Cache NPM packages'
+            inputs:
+              key: 'npm | "$(Agent.OS)" | $(FRONTEND_DIR)/package-lock.json'
+              restoreKeys: |
+                npm | "$(Agent.OS)"
+              path: $(HOME)/.npm
+
+          - script: npm ci
+            workingDirectory: $(FRONTEND_DIR)
+            displayName: 'Install NPM Dependencies (Fast)'
+
+          - script: npm run build
+            workingDirectory: $(FRONTEND_DIR)
+            displayName: 'Build React Frontend'
+
+      # --- ELECTRON JOB ---
+      - job: BuildElectron
+        displayName: 'Build Electron Application'
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '18.x'
+
+          # Cache NPM Dependencies
+          - task: Cache@2
+            displayName: 'Cache NPM Electron packages'
+            inputs:
+              key: 'npm-electron | "$(Agent.OS)" | $(ELECTRON_DIR)/package-lock.json'
+              restoreKeys: |
+                npm-electron | "$(Agent.OS)"
+              path: $(HOME)/.npm
+
+          - script: npm ci
+            workingDirectory: $(ELECTRON_DIR)
+            displayName: 'Install Electron Dependencies'
+
+          - script: npm run dist
+            workingDirectory: $(ELECTRON_DIR)
+            displayName: 'Build Electron Distributable'
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Archive EXE Artifact'
+            inputs:
+              PathtoPublish: '$(ELECTRON_DIR)/dist'
+              ArtifactName: 'exe-installer'
+              publishLocation: 'Container'
+
+  # =======================================================
+  # 3. SONARQUBE ANALYSIS
+  # =======================================================
+  - stage: CodeQuality
+    displayName: 'SonarQube Analysis'
+    dependsOn: BuildAndTest
+    jobs:
+      - job: SonarQube
+        steps:
+          - download: current
+            artifact: backend-target
+
+          # Prepare SonarQube analysis configuration
+          - task: SonarQubePrepare@5
+            inputs:
+              SonarQube: 'NaukriAutomator-SC'
+              scannerMode: 'CLI'
+              configMode: 'manual'
+              cliProjectKey: 'NA_Jenkins_Demo'
+              cliProjectName: 'NA_Jenkins_Demo'
+              cliSources: 'backend/src,frontend/src'
+              extraProperties: |
+                sonar.java.binaries=$(Pipeline.Workspace)/backend-target/classes
+                sonar.java.libraries=$(Pipeline.Workspace)/backend-target/dependency/*.jar
+                sonar.scanner.skipJreProvisioning=true
+
+          - task: SonarQubeAnalyze@5
+            displayName: 'Run SonarQube Analysis'
+
+          - task: SonarQubePublish@5
+            displayName: 'Publish Quality Gate Result'
+            inputs:
+              pollingTimeoutSec: '600'
+
+  # =======================================================
+  # 4. TERRAFORM & DEPLOYMENT
+  # =======================================================
+  - stage: InfrastructureAndDeploy
+    displayName: 'Terraform & Blob Storage Deployment'
+    dependsOn: CodeQuality
+    jobs:
+      - job: TerraformAndUpload
+        steps:
+          - download: current
+            artifact: exe-installer
+
+          # Use Azure Key Vault or Service Connection variables for ARM credentials
+          - task: TerraformInstaller@0
+            inputs:
+              terraformVersion: 'latest'
+
+          - script: |
+              terraform init
+              terraform validate
+              terraform plan
+              terraform apply -auto-approve
+            workingDirectory: 'Terraform'
+            displayName: 'Run Terraform Commands'
+            env:
+              ARM_CLIENT_ID: $(AZURE_CLIENT_ID)
+              ARM_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
+              ARM_TENANT_ID: $(AZURE_TENANT_ID)
+              ARM_SUBSCRIPTION_ID: $(AZURE_SUBSCRIPTION_ID)
+
+          # Azure CLI Task uses automated Service Connection authentication (no need for manual login steps)
+          - task: AzureCLI@2
+            displayName: 'Upload EXE to Azure Blob & Verify'
+            inputs:
+              azureSubscription: 'Qwerty-Service-Connection'
+              scriptType: 'ps'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                $exeFile = Get-ChildItem -Path "$(Pipeline.Workspace)/exe-installer/*.exe" | Select-Object -First 1
+                $blobName = "NaukriAutomator-$(Build.BuildId).exe"
+
+                Write-Host "Uploading $($exeFile.FullName) as $blobName..."
+
+                az storage blob upload `
+                  --account-name naterraformstorage01 `
+                  --container-name nacontainer `
+                  --file "$($exeFile.FullName)" `
+                  --name "$blobName" `
+                  --auth-mode login `
+                  --overwrite
+
+                Write-Host "===== Verifying Delivery ====="
+                az storage blob show `
+                  --account-name naterraformstorage01 `
+                  --container-name nacontainer `
+                  --name "$blobName" `
+                  --auth-mode login `
+                  --query "{Name:name, Size:properties.contentLength, Modified:properties.lastModified}" `
+                  --output table
