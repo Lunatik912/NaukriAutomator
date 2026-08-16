@@ -160,7 +160,7 @@ stages:
     - task: SonarQubePrepare@8
       displayName: 'Prepare SonarQube Analysis'
       inputs:
-        SonarQube: 'ADO-Sonarqube-Service-Connection'
+        SonarQube: 'NaukriAutomator-SC'
         scannerMode: 'cli'
         configMode: 'manual'
         cliProjectKey: '$(SONAR_PROJECT_KEY)'
